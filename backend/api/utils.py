@@ -35,13 +35,56 @@ def log_action(action: str, user_role: str, user_name: str, status: str = "info"
 
 def get_profile_by_external_id(external_id: str) -> Profile | None:
     try:
-        return Profile.objects.select_related("user").get(external_id=external_id)
+        return Profile.objects.select_related("user", "contract").get(external_id=external_id)
     except Profile.DoesNotExist:
         return None
 
 
 def get_default_client_profile() -> Profile | None:
-    return Profile.objects.filter(role="client", status="active").select_related("user").first()
+    return (
+        Profile.objects.filter(role="client", status="active")
+        .select_related("user", "contract")
+        .first()
+    )
+
+
+def is_institutional_client(profile: Profile) -> bool:
+    return profile.role == "client" and profile.contract_id is not None
+
+
+def get_contract_for_client(profile: Profile) -> ContractDetails | None:
+    if profile.contract_id:
+        contract = profile.contract
+        if contract:
+            contract.refresh_status()
+            contract.save(update_fields=["status"])
+        return contract
+    return check_and_get_contract()
+
+
+def resolve_client_profile(client_id: str | None) -> tuple[Profile | None, str | None]:
+    if client_id:
+        profile = get_profile_by_external_id(client_id)
+        if not profile:
+            return None, "Client account not found."
+        if profile.role != "client":
+            return None, "Invalid client account."
+        if profile.status != "active":
+            return None, "This client account is not active."
+        if profile.contract_id:
+            contract = profile.contract
+            if not contract:
+                return None, "Institution contract not found."
+            contract.refresh_status()
+            contract.save(update_fields=["status"])
+            if contract.status == "expired":
+                return None, "Access Denied: Your corporate SLA Contract duration has expired."
+        return profile, None
+
+    profile = get_default_client_profile()
+    if not profile:
+        return None, "No client profile configured."
+    return profile, None
 
 
 def serialize_user(profile: Profile) -> dict:
@@ -60,6 +103,11 @@ def serialize_user(profile: Profile) -> dict:
         data["hourlyRate"] = float(profile.hourly_rate)
     if profile.avatar:
         data["avatar"] = profile.avatar
+    if profile.contract_id and profile.contract:
+        data["contractId"] = profile.contract.contract_id
+        data["organizationName"] = profile.contract.organization_name
+        data["isInstitutionPrimary"] = profile.is_institution_primary
+    data["provisionedPassword"] = profile.provisioned_password or "demo1234"
     return data
 
 

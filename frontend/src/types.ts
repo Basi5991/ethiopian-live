@@ -9,6 +9,10 @@ export interface User {
   completedSessions?: number;
   hourlyRate?: number;
   avatar?: string;
+  contractId?: string;
+  organizationName?: string;
+  isInstitutionPrimary?: boolean;
+  provisionedPassword?: string;
 }
 
 export interface ChatMessage {

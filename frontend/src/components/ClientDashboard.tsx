@@ -107,6 +107,7 @@ interface ClientDashboardProps {
   contractDetails: ContractDetails | null;
   contractsList: ContractDetails[];
   activeContractId: string;
+  currentUser?: User | null;
   onActionComplete: () => void;
   theme?: string;
 }
@@ -119,12 +120,13 @@ export default function ClientDashboard({
   contractDetails, 
   contractsList = [],
   activeContractId,
+  currentUser: currentUserProp,
   onActionComplete,
   theme = "dark"
 }: ClientDashboardProps) {
 
-  // Retrieve authenticated user from localStorage
-  const currentUser = (() => {
+  // Retrieve authenticated user from localStorage or prop
+  const currentUser = currentUserProp || (() => {
     try {
       const saved = localStorage.getItem("orzo_auth_user");
       return saved ? JSON.parse(saved) : null;
@@ -132,6 +134,9 @@ export default function ClientDashboard({
       return null;
     }
   })();
+
+  const isInstitutionalClient = Boolean(currentUser?.contractId);
+  const clientId = currentUser?.id || "usr_client13";
 
   // Dashboard Slider Section Switcher
   const [dashboardSlide, setDashboardSlide] = useState<"terminal" | "ai" | "billing">("terminal");
@@ -214,7 +219,6 @@ export default function ClientDashboard({
   };
 
   // Watch sessions for active patient context
-  const clientId = currentUser?.id || "usr_client13";
   useEffect(() => {
     const live = sessions.find(
       (s) =>
@@ -317,7 +321,8 @@ export default function ClientDashboard({
           serviceType,
           serviceMode,
           scheduledTime: scheduledTimeValue,
-          cost
+          cost,
+          clientId,
         })
       });
 
@@ -381,7 +386,8 @@ export default function ClientDashboard({
           languageTo: langTo,
           serviceType,
           serviceMode: "Both",
-          cost
+          cost,
+          clientId,
         })
       });
 
@@ -638,12 +644,13 @@ export default function ClientDashboard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: sendText,
-          userId: "usr_client13",
+          userId: clientId,
           context: {
             activeTab: "client_simple_workspace",
-            walletBalance,
+            walletBalance: isInstitutionalClient ? undefined : walletBalance,
             selectedLanguages: `${langFrom} to ${langTo}`,
-            serviceType
+            serviceType,
+            organizationName: currentUser?.organizationName,
           }
         })
       });
@@ -691,6 +698,7 @@ export default function ClientDashboard({
   // Deposit Submit trigger
   const handleDepositSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isInstitutionalClient) return;
     const amount = Number(depositAmount);
     if (isNaN(amount) || amount <= 0) return;
 
@@ -698,7 +706,7 @@ export default function ClientDashboard({
       const res = await fetch("/api/wallet/deposit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount })
+        body: JSON.stringify({ amount, clientId })
       });
       if (res.ok) {
         setDepositSuccess(true);
@@ -743,7 +751,7 @@ export default function ClientDashboard({
     ? Math.max(0, Math.ceil((new Date(contractDetails.expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : null;
 
-  const contextOrgName = contractDetails?.organizationName || "Ethiopian Ministry of Health";
+  const contextOrgName = contractDetails?.organizationName || currentUser?.organizationName || "Ethiopian Ministry of Health";
   const cardSurface = theme === "light" ? "bg-white border-slate-200 shadow-sm" : "bg-[#16161A]/80 border-white/5";
   const inputSurface = theme === "light"
     ? "bg-slate-50 border-slate-200 text-slate-800"
@@ -796,10 +804,15 @@ export default function ClientDashboard({
             <CheckCircle2 className="w-3.5 h-3.5" />
             {contractDetails.status === "expired" ? "Expired" : `${contractDaysValid} Days Valid`}
           </span>
-        ) : (
+        ) : !isInstitutionalClient ? (
           <span className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
             <CheckCircle2 className="w-3.5 h-3.5" />
             {walletBalance.toFixed(0)} ETB Balance
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Offline Invoicing
           </span>
         )}
       </div>
@@ -1396,7 +1409,7 @@ export default function ClientDashboard({
                   Recent Clinical Session Queue
                 </span>
                 <div className="space-y-2">
-                  {sessions.filter(s => s.clientId === "usr_client13").slice(0, 3).map((sess) => (
+                  {sessions.filter(s => s.clientId === clientId).slice(0, 3).map((sess) => (
                     <div key={sess.id} className={`p-3 border rounded-xl flex items-center justify-between text-xs ${
                       theme === "light" ? "bg-slate-50 border-slate-200" : "bg-zinc-950/40 border-white/5"
                     }`}>
@@ -1447,7 +1460,8 @@ export default function ClientDashboard({
             </div>
 
             <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-              {/* Left Column: Escrow Deposit */}
+              {/* Left Column: Escrow Deposit (hidden for institutional offline billing) */}
+              {!isInstitutionalClient ? (
               <div className="space-y-4">
                 <h3 className={`text-xs font-bold uppercase tracking-wider ${theme === "light" ? "text-slate-700" : "text-white"}`}>
                   💳 Escrow Wallet & CBE Deposit
@@ -1487,6 +1501,21 @@ export default function ClientDashboard({
                   </div>
                 )}
               </div>
+              ) : (
+              <div className="space-y-4">
+                <h3 className={`text-xs font-bold uppercase tracking-wider ${theme === "light" ? "text-slate-700" : "text-white"}`}>
+                  🏛️ Institutional Offline Billing
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Your organization is billed offline under the active SLA contract ({contextOrgName}). Session access is governed by contract validity — no in-app wallet top-up is required.
+                </p>
+                {currentUser?.isInstitutionPrimary && (
+                  <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">
+                    Primary org account
+                  </p>
+                )}
+              </div>
+              )}
 
               {/* Right Column: Contract Extension */}
               {contractDetails && (

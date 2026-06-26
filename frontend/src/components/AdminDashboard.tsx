@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { User, Session, Transaction, AuditLog, ContractDetails } from "../types";
 import { RegisterInterpreterPayload, RegisterInterpreterResult } from "../lib/interpreterRegistration";
+import { RegisterClientPayload, RegisterClientResult } from "../lib/clientRegistration";
 
 // Simple audio feedback helper
 const playBeepTone = (frequency: number, durationMs: number) => {
@@ -39,6 +40,7 @@ interface AdminDashboardProps {
   activeContractId: string;
   onActionComplete: () => void;
   onRegisterInterpreter: (payload: RegisterInterpreterPayload) => Promise<RegisterInterpreterResult>;
+  onRegisterInstitutionClient: (payload: RegisterClientPayload) => Promise<RegisterClientResult>;
   theme?: string;
 }
 
@@ -52,6 +54,7 @@ export default function AdminDashboard({
   activeContractId,
   onActionComplete,
   onRegisterInterpreter,
+  onRegisterInstitutionClient,
   theme = "dark"
 }: AdminDashboardProps) {
   // Retrieve authenticated user from localStorage
@@ -100,6 +103,18 @@ export default function AdminDashboard({
   const [newInterpreterError, setNewInterpreterError] = useState("");
   const [isCreatingInterpreter, setIsCreatingInterpreter] = useState(false);
 
+  const [newClientName, setNewClientName] = useState("");
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientPassword, setNewClientPassword] = useState("demo1234");
+  const [newClientContractId, setNewClientContractId] = useState(
+    () => contractsList[0]?.contractId || activeContractId || ""
+  );
+  const [newClientIsPrimary, setNewClientIsPrimary] = useState(true);
+  const [newClientStatus, setNewClientStatus] = useState<"active" | "pending" | "suspended">("active");
+  const [newClientSuccess, setNewClientSuccess] = useState("");
+  const [newClientError, setNewClientError] = useState("");
+  const [isCreatingClient, setIsCreatingClient] = useState(false);
+
   // Sync state if backend updates
   React.useEffect(() => {
     if (contractDetails) {
@@ -108,6 +123,12 @@ export default function AdminDashboard({
       setAdminCode(contractDetails.billingCode);
     }
   }, [contractDetails]);
+
+  React.useEffect(() => {
+    if (!newClientContractId && contractsList.length > 0) {
+      setNewClientContractId(activeContractId || contractsList[0].contractId);
+    }
+  }, [contractsList, activeContractId, newClientContractId]);
 
   const handleAdminContractSubmit = async (daysDelta: number) => {
     try {
@@ -285,6 +306,59 @@ export default function AdminDashboard({
     }
   };
 
+  const handleCreateClientSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setNewClientError("");
+    setNewClientSuccess("");
+
+    if (!newClientName.trim()) {
+      setNewClientError("Full name is required.");
+      return;
+    }
+    if (!newClientEmail.trim()) {
+      setNewClientError("Email address is required.");
+      return;
+    }
+    if (!newClientContractId) {
+      setNewClientError("Select an institution contract.");
+      return;
+    }
+
+    setIsCreatingClient(true);
+    try {
+      const result = await onRegisterInstitutionClient({
+        name: newClientName.trim(),
+        email: newClientEmail.trim(),
+        password: newClientPassword.trim() || "demo1234",
+        contractId: newClientContractId,
+        isInstitutionPrimary: newClientIsPrimary,
+        status: newClientStatus,
+        adminName: currentUser?.name || "Administrator",
+      });
+
+      if (result.ok && result.user) {
+        playBeepTone(880, 120);
+        setNewClientSuccess(
+          `Institution client ${result.user.name} registered successfully.${
+            result.temporaryPassword ? ` Login password: ${result.temporaryPassword}` : ""
+          }${result.localOnly ? " (Saved locally until dev server is restarted on port 3000.)" : ""}`
+        );
+        setNewClientName("");
+        setNewClientEmail("");
+        setNewClientPassword("demo1234");
+        setRoleFilter("client");
+        onActionComplete();
+      } else {
+        setNewClientError(result.error || "Failed to register institution client.");
+      }
+    } catch (err) {
+      console.error(err);
+      setNewClientError("Registration failed unexpectedly. Please try again.");
+    } finally {
+      setIsCreatingClient(false);
+    }
+  };
+
   const handleUpdateHourlyRate = async (id: string, rate: number) => {
     try {
       const res = await fetch(`/api/users/${id}/update`, {
@@ -319,9 +393,9 @@ export default function AdminDashboard({
 
   // Convert state for CSV export
   const exportUsersCSV = () => {
-    const headers = "ID,Name,Email,Role,Status,Completed Sessions,Hourly Rate\n";
-    const rows = users.map(u => 
-      `"${u.id}","${u.name}","${u.email}","${u.role}","${u.status}",${u.completedSessions || 0},${u.hourlyRate || 0}`
+    const headers = "ID,Name,Email,Role,Status,Password,Completed Sessions,Hourly Rate\n";
+    const rows = users.map(u =>
+      `"${u.id}","${u.name}","${u.email}","${u.role}","${u.status}","${u.provisionedPassword || "demo1234"}",${u.completedSessions || 0},${u.hourlyRate || 0}`
     ).join("\n");
     
     const blob = new Blob([headers + rows], { type: "text/csv" });
@@ -1136,6 +1210,117 @@ export default function AdminDashboard({
             </div>
           </form>
 
+          {/* Register Institution Client */}
+          <form
+            id="admin-add-institution-client"
+            onSubmit={handleCreateClientSubmit}
+            className="bg-[#16161A] border border-white/5 rounded-2xl shadow-2xl overflow-hidden"
+          >
+            <div className="p-5 border-b border-white/5 bg-black/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-widest text-slate-300 flex items-center gap-2">
+                  <UserPlus className="w-4 h-4 text-emerald-400" />
+                  Register Institution Client
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Provision primary org logins and staff sub-accounts linked to an active SLA contract.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {newClientSuccess && (
+                <div className="p-3 bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 text-xs rounded-xl">
+                  ✓ {newClientSuccess}
+                </div>
+              )}
+              {newClientError && (
+                <div className="p-3 bg-rose-500/15 border border-rose-500/20 text-rose-400 text-xs rounded-xl">
+                  ⚠️ {newClientError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-zinc-400">Institution Contract</label>
+                  <select
+                    value={newClientContractId}
+                    onChange={(e) => setNewClientContractId(e.target.value)}
+                    className="w-full bg-zinc-900/90 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  >
+                    {contractsList.map((c) => (
+                      <option key={c.contractId} value={c.contractId}>
+                        {c.organizationName} ({c.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-zinc-400">Full Name</label>
+                  <input
+                    type="text"
+                    placeholder="Dawit Yohannes"
+                    value={newClientName}
+                    onChange={(e) => setNewClientName(e.target.value)}
+                    className="w-full bg-zinc-900/90 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-zinc-400">Email</label>
+                  <input
+                    type="email"
+                    placeholder="desk@moh.gov.et"
+                    value={newClientEmail}
+                    onChange={(e) => setNewClientEmail(e.target.value)}
+                    className="w-full bg-zinc-900/90 border border-white/10 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] uppercase font-bold text-zinc-400">Initial Password</label>
+                  <input
+                    type="text"
+                    value={newClientPassword}
+                    onChange={(e) => setNewClientPassword(e.target.value)}
+                    className="w-full bg-zinc-900/90 border border-white/10 rounded-lg p-2.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newClientIsPrimary}
+                    onChange={(e) => setNewClientIsPrimary(e.target.checked)}
+                    className="rounded border-white/20"
+                  />
+                  Primary org account (one per institution)
+                </label>
+                <div className="flex items-center gap-2">
+                  <label className="text-[9px] uppercase font-bold text-zinc-400">Status</label>
+                  <select
+                    value={newClientStatus}
+                    onChange={(e) => setNewClientStatus(e.target.value as "active" | "pending" | "suspended")}
+                    className="bg-zinc-900/90 border border-white/10 rounded-lg p-2 text-xs text-white focus:outline-none"
+                  >
+                    <option value="active">Active</option>
+                    <option value="pending">Pending</option>
+                    <option value="suspended">Suspended</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isCreatingClient}
+                className="w-full sm:w-auto px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-2"
+              >
+                <UserPlus className="w-4 h-4" />
+                {isCreatingClient ? "Registering..." : "Add Institution Client"}
+              </button>
+            </div>
+          </form>
+
           {/* Main Users Management Data Grid (Complete Admin Table) */}
           <div id="admin-user-management" className="bg-[#16161A] border border-white/5 rounded-2xl shadow-2xl overflow-hidden">
         
@@ -1199,7 +1384,9 @@ export default function AdminDashboard({
             <thead>
               <tr className="border-b border-white/5 text-[10px] font-bold text-slate-500 uppercase bg-black/5 tracking-wider">
                 <th className="p-4">Identities</th>
+                <th className="p-4">Login Password</th>
                 <th className="p-4">Role / Authority</th>
+                <th className="p-4">Institution</th>
                 <th className="p-4">Accredited Languages</th>
                 <th className="p-4">Hourly Payout</th>
                 <th className="p-4">Performance Index</th>
@@ -1225,6 +1412,11 @@ export default function AdminDashboard({
                     </div>
                   </td>
                   <td className="p-4">
+                    <code className="text-[11px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded">
+                      {user.provisionedPassword || "demo1234"}
+                    </code>
+                  </td>
+                  <td className="p-4">
                     <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[9px] uppercase font-black border tracking-wider ${
                       user.role === "admin" ? "bg-purple-500/10 text-purple-400 border-purple-500/20" :
                       user.role === "interpreter" ? "bg-blue-500/10 text-blue-400 border-blue-500/20" :
@@ -1232,6 +1424,18 @@ export default function AdminDashboard({
                     }`}>
                       {user.role}
                     </span>
+                  </td>
+                  <td className="p-4 text-[11px] text-slate-400">
+                    {user.role === "client" && user.organizationName ? (
+                      <div>
+                        <span className="text-slate-200 block">{user.organizationName}</span>
+                        {user.isInstitutionPrimary && (
+                          <span className="text-[9px] uppercase text-emerald-400 font-bold">Primary</span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-zinc-550">—</span>
+                    )}
                   </td>
                   <td className="p-4 font-mono text-[11px] text-slate-400">
                     {user.languages ? user.languages.join(", ") : "—"}

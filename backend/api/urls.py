@@ -19,6 +19,8 @@ urlpatterns = [
     path("contract/select", views.ContractSelectView.as_view()),
     path("contract/extend", views.ContractExtendView.as_view()),
     path("users/interpreters/create", views.InterpreterCreateView.as_view()),
+    path("users/clients/create", views.ClientCreateView.as_view()),
+    path("institutions/<str:contract_id>/clients", views.InstitutionClientsListView.as_view()),
     path("users/<str:user_id>/update", views.UserUpdateView.as_view()),
     path("scheduler/update", views.SchedulerUpdateView.as_view()),
     path("gemini/translate", views.GeminiTranslateView.as_view()),

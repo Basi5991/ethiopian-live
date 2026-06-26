@@ -141,6 +141,7 @@ class Command(BaseCommand):
                     "completed_sessions": item.get("completed_sessions", 0),
                     "hourly_rate": item.get("hourly_rate", 40),
                     "avatar": item.get("avatar", ""),
+                    "provisioned_password": "demo1234",
                 },
             )
             profiles[item["external_id"]] = profile
@@ -191,6 +192,12 @@ class Command(BaseCommand):
                     "status": contract.status,
                 },
             )
+
+        moh_contract = ContractDetails.objects.get(contract_id="ELLIOT-CON-MOH-2026")
+        moh_client = profiles["usr_client13"]
+        moh_client.contract = moh_contract
+        moh_client.is_institution_primary = True
+        moh_client.save(update_fields=["contract", "is_institution_primary"])
 
         state = AppState.get()
         state.client_wallet_balance = 2450.0

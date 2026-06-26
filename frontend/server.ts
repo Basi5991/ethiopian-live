@@ -40,6 +40,10 @@ interface User {
   completedSessions?: number;
   hourlyRate?: number;
   avatar?: string;
+  contractId?: string;
+  organizationName?: string;
+  isInstitutionPrimary?: boolean;
+  provisionedPassword?: string;
 }
 
 interface Session {
@@ -112,12 +116,23 @@ interface ContractDetails {
 
 // Initial Data Population
 let users: User[] = [
-  { id: "usr_admin1", name: "Almaz Kebede", email: "admin@elliot.live", role: "admin", status: "active", avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150" },
-  { id: "usr_client13", name: "Dawit Yohannes", email: "dawit@client.com", role: "client", status: "active", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150" },
-  { id: "usr_int1", name: "Bekele Megersa", email: "bekele@oromo-interpret.com", role: "interpreter", status: "active", languages: ["Afaan Oromo", "Afar", "Amharic", "English"], rating: 4.9, completedSessions: 142, hourlyRate: 45, avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150" },
-  { id: "usr_int2", name: "Haleema Bashir", email: "haleema@somali-interpret.com", role: "interpreter", status: "active", languages: ["Somali", "English", "Amharic"], rating: 4.8, completedSessions: 94, hourlyRate: 40, avatar: "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=150" },
-  { id: "usr_int3", name: "Yared Girmay", email: "yared@tigrinya-interpret.com", role: "interpreter", status: "active", languages: ["Tigrinya", "Amharic", "English"], rating: 4.7, completedSessions: 81, hourlyRate: 35, avatar: "https://images.unsplash.com/photo-1542909168-82c3e7fdca5c?w=150" },
-  { id: "usr_int4", name: "Selamawit Tadesse", email: "selam@amharic-interpret.com", role: "interpreter", status: "active", languages: ["Amharic", "English"], rating: 4.95, completedSessions: 310, hourlyRate: 50, avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150" }
+  { id: "usr_admin1", name: "Almaz Kebede", email: "admin@elliot.live", role: "admin", status: "active", avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150", provisionedPassword: "demo1234" },
+  {
+    id: "usr_client13",
+    name: "Dawit Yohannes",
+    email: "dawit@client.com",
+    role: "client",
+    status: "active",
+    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150",
+    contractId: "ELLIOT-CON-MOH-2026",
+    organizationName: "Ethiopian Ministry of Health",
+    isInstitutionPrimary: true,
+    provisionedPassword: "demo1234",
+  },
+  { id: "usr_int1", name: "Bekele Megersa", email: "bekele@oromo-interpret.com", role: "interpreter", status: "active", languages: ["Afaan Oromo", "Afar", "Amharic", "English"], rating: 4.9, completedSessions: 142, hourlyRate: 45, avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150", provisionedPassword: "demo1234" },
+  { id: "usr_int2", name: "Haleema Bashir", email: "haleema@somali-interpret.com", role: "interpreter", status: "active", languages: ["Somali", "English", "Amharic"], rating: 4.8, completedSessions: 94, hourlyRate: 40, avatar: "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=150", provisionedPassword: "demo1234" },
+  { id: "usr_int3", name: "Yared Girmay", email: "yared@tigrinya-interpret.com", role: "interpreter", status: "active", languages: ["Tigrinya", "Amharic", "English"], rating: 4.7, completedSessions: 81, hourlyRate: 35, avatar: "https://images.unsplash.com/photo-1542909168-82c3e7fdca5c?w=150", provisionedPassword: "demo1234" },
+  { id: "usr_int4", name: "Selamawit Tadesse", email: "selam@amharic-interpret.com", role: "interpreter", status: "active", languages: ["Amharic", "English"], rating: 4.95, completedSessions: 310, hourlyRate: 50, avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150", provisionedPassword: "demo1234" }
 ];
 
 let sessions: Session[] = [
@@ -246,6 +261,61 @@ function checkAndGetContract(): ContractDetails {
     maxConcurrentSessions: 1,
     status: "active"
   };
+}
+
+function getUserById(userId: string | undefined): User | undefined {
+  return userId ? users.find((u) => u.id === userId) : undefined;
+}
+
+function isInstitutionalClient(user: User | undefined): boolean {
+  return Boolean(user?.role === "client" && user.contractId);
+}
+
+function refreshContractStatus(contract: ContractDetails): ContractDetails {
+  const expired = new Date(contract.expiryDate).getTime() < Date.now();
+  contract.status = expired ? "expired" : "active";
+  return contract;
+}
+
+function getContractForClient(client: User | undefined): ContractDetails {
+  if (client?.contractId) {
+    const contract = contractsList.find((c) => c.contractId === client.contractId);
+    if (contract) {
+      return refreshContractStatus(contract);
+    }
+  }
+  return checkAndGetContract();
+}
+
+function resolveClientProfile(clientId: string | undefined): { client: User | undefined; error?: string } {
+  if (clientId) {
+    const client = getUserById(clientId);
+    if (!client) {
+      return { client: undefined, error: "Client account not found." };
+    }
+    if (client.role !== "client") {
+      return { client: undefined, error: "Invalid client account." };
+    }
+    if (client.status !== "active") {
+      return { client: undefined, error: "This client account is not active." };
+    }
+    if (client.contractId) {
+      const contract = getContractForClient(client);
+      if (contract.status === "expired") {
+        return {
+          client: undefined,
+          error: "Access Denied: Your corporate SLA Contract duration has expired.",
+        };
+      }
+    }
+    return { client };
+  }
+
+  const fallback = users.find((u) => u.role === "client" && u.status === "active");
+  if (!fallback) {
+    return { client: undefined, error: "No client profile configured." };
+  }
+  return { client: fallback };
 }
 
 // Helper to push audit logs
@@ -541,6 +611,10 @@ Output only raw JSON code.`;
 
 // Get initial catalog details
 app.get("/api/init", (req, res) => {
+  const clientId = typeof req.query.clientId === "string" ? req.query.clientId : undefined;
+  const { client } = resolveClientProfile(clientId);
+  const contractDetails = client ? getContractForClient(client) : checkAndGetContract();
+
   res.json({
     users,
     sessions,
@@ -548,8 +622,8 @@ app.get("/api/init", (req, res) => {
     availabilities,
     auditLogs,
     clientWalletBalance,
-    contractDetails: checkAndGetContract(),
-    contractsList,
+    contractDetails,
+    contractsList: contractsList.map((c) => refreshContractStatus({ ...c })),
     activeContractId,
     aiAvailable: !!ai
   });
@@ -625,6 +699,7 @@ function handleInterpreterCreate(req: import("express").Request, res: import("ex
     completedSessions: 0,
     hourlyRate,
     avatar: avatar || undefined,
+    provisionedPassword: password,
   };
 
   users.push(newUser);
@@ -645,9 +720,96 @@ function handleInterpreterCreate(req: import("express").Request, res: import("ex
 app.post("/api/users/interpreters/create", handleInterpreterCreate);
 app.post("/api/admin/register-interpreter", handleInterpreterCreate);
 
+function handleClientCreate(req: import("express").Request, res: import("express").Response) {
+  const name = (req.body.name || "").trim();
+  const email = (req.body.email || "").trim();
+  const password = req.body.password || "demo1234";
+  const contractId = (req.body.contractId || "").trim();
+  const isPrimary = Boolean(req.body.isInstitutionPrimary);
+  const accountStatus = req.body.status || "active";
+  const adminName = (req.body.adminName || "Administrator").trim();
+
+  if (!name) {
+    return res.status(400).json({ error: "Client name is required." });
+  }
+  if (!email) {
+    return res.status(400).json({ error: "Email address is required." });
+  }
+  if (!contractId) {
+    return res.status(400).json({ error: "Institution contract is required." });
+  }
+
+  const contract = contractsList.find((c) => c.contractId === contractId);
+  if (!contract) {
+    return res.status(404).json({ error: "Institution contract not found." });
+  }
+  refreshContractStatus(contract);
+  if (contract.status === "expired") {
+    return res.status(400).json({ error: "Cannot create client for an expired institution contract." });
+  }
+
+  if (isPrimary && users.some(
+    (u) => u.role === "client" && u.contractId === contractId && u.isInstitutionPrimary
+  )) {
+    return res.status(409).json({ error: "A primary org account already exists for this institution." });
+  }
+
+  if (users.some((u) => u.email.trim().toLowerCase() === email.toLowerCase())) {
+    return res.status(409).json({ error: "An account with this email already exists." });
+  }
+
+  const newUser: User = {
+    id: `usr_client_${Math.floor(1000 + Math.random() * 9000)}`,
+    name,
+    email,
+    role: "client",
+    status: accountStatus === "suspended" || accountStatus === "pending" ? accountStatus : "active",
+    contractId,
+    organizationName: contract.organizationName,
+    isInstitutionPrimary: isPrimary,
+    provisionedPassword: password,
+  };
+
+  users.push(newUser);
+  const accountLabel = isPrimary ? "primary org" : "staff";
+  logAction(
+    `New institution ${accountLabel} client registered: ${newUser.name} (${contract.organizationName})`,
+    "admin",
+    adminName,
+    "success"
+  );
+
+  res.status(201).json({
+    success: true,
+    user: newUser,
+    temporaryPassword: password === "demo1234" ? "demo1234" : null,
+  });
+}
+
+app.post("/api/users/clients/create", handleClientCreate);
+
+app.get("/api/institutions/:contractId/clients", (req, res) => {
+  const contract = contractsList.find((c) => c.contractId === req.params.contractId);
+  if (!contract) {
+    return res.status(404).json({ error: "Contract not found" });
+  }
+  const clients = users.filter((u) => u.role === "client" && u.contractId === contract.contractId);
+  res.json({ clients });
+});
+
 // Update client wallet balance
 app.post("/api/wallet/deposit", (req, res) => {
-  const { amount, source } = req.body;
+  const { amount, clientId } = req.body;
+  const { client, error } = resolveClientProfile(clientId);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+  if (isInstitutionalClient(client)) {
+    return res.status(400).json({
+      error: "Institutional accounts use offline billing. Wallet top-up is not available.",
+    });
+  }
+
   const parsed = Number(amount);
   if (isNaN(parsed) || parsed <= 0) {
     return res.status(400).json({ error: "Invalid deposit amount" });
@@ -658,8 +820,8 @@ app.post("/api/wallet/deposit", (req, res) => {
   
   const txn: Transaction = {
     id: `tx_dep_${Math.random().toString(36).substr(2, 9)}`,
-    userId: "usr_client13",
-    userName: "Dawit Yohannes",
+    userId: client?.id || "usr_client13",
+    userName: client?.name || "Client",
     type: "deposit",
     amount: parsed,
     status: "completed",
@@ -668,7 +830,7 @@ app.post("/api/wallet/deposit", (req, res) => {
   };
   transactions.unshift(txn);
   
-  logAction(`Wallet deposit completed successfully via Chapa. Amount: ${parsed} ETB`, "client", "Dawit Yohannes", "success");
+  logAction(`Wallet deposit completed successfully via Chapa. Amount: ${parsed} ETB`, "client", client?.name || "Client", "success");
   
   res.json({ balance: clientWalletBalance, transaction: txn });
 });
@@ -799,22 +961,25 @@ app.get("/api/sessions", (req, res) => {
 
 // Post a direct speed-dial calling request to a specific interpreter
 app.post("/api/calls/dial", (req, res) => {
-  const { interpreterId, languageFrom, languageTo, serviceType, serviceMode, cost } = req.body;
-  
-  const contract = checkAndGetContract();
+  const { interpreterId, languageFrom, languageTo, serviceType, serviceMode, cost, clientId } = req.body;
+
+  const { client, error } = resolveClientProfile(clientId);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const contract = getContractForClient(client);
   if (contract.status === "expired") {
     return res.status(400).json({ error: "Access Denied: Your corporate SLA Contract duration has expired. Please contact your administrative manager." });
   }
 
   const parsedCost = Number(cost) || 350;
-  // Contract active, billing logged against SLA code: EMH-ADDIS-8898
-
   const targetInt = users.find(u => u.id === interpreterId);
 
   const newSession: Session = {
     id: `sess_call_${Math.floor(1000 + Math.random() * 9000)}`,
-    clientId: "usr_client13",
-    clientName: "Dawit Yohannes",
+    clientId: client!.id,
+    clientName: client!.name,
     interpreterId: interpreterId,
     interpreterName: targetInt?.name || "Direct Dial Specialist",
     languageFrom: languageFrom || "Amharic",
@@ -833,20 +998,21 @@ app.post("/api/calls/dial", (req, res) => {
 
   sessions.unshift(newSession);
 
-  // Log transaction
-  const txn: Transaction = {
-    id: `tx_dial_${Math.random().toString(36).substr(2, 9)}`,
-    userId: "usr_client13",
-    userName: "Dawit Yohannes",
-    type: "payment",
-    amount: parsedCost,
-    status: "completed",
-    timestamp: new Date().toISOString(),
-    reference: `RESERVE-${newSession.id}`
-  };
-  transactions.unshift(txn);
+  if (!isInstitutionalClient(client)) {
+    const txn: Transaction = {
+      id: `tx_dial_${Math.random().toString(36).substr(2, 9)}`,
+      userId: client!.id,
+      userName: client!.name,
+      type: "payment",
+      amount: parsedCost,
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      reference: `RESERVE-${newSession.id}`
+    };
+    transactions.unshift(txn);
+  }
 
-  logAction(`Direct ring call initiated to: ${newSession.interpreterName} (${newSession.languageFrom} ⇆ ${newSession.languageTo}). Hold: ${parsedCost} ETB`, "client", "Dawit Yohannes", "info");
+  logAction(`Direct ring call initiated to: ${newSession.interpreterName} (${newSession.languageFrom} ⇆ ${newSession.languageTo}). Hold: ${parsedCost} ETB`, "client", client!.name, "info");
 
   res.json({ session: newSession, balance: clientWalletBalance });
 });
@@ -858,21 +1024,25 @@ app.post("/api/sessions/:id/reject", (req, res) => {
   if (!session) return res.status(404).json({ error: "Session not found" });
 
   session.status = "cancelled";
-  
-  // Refund client wallet capacity since call was declined
-  clientWalletBalance += session.cost;
-  
-  const refundTxn: Transaction = {
-    id: `tx_ref_${Math.random().toString(36).substr(2, 9)}`,
-    userId: "usr_client13",
-    userName: "Dawit Yohannes",
-    type: "refund",
-    amount: session.cost,
-    status: "completed",
-    timestamp: new Date().toISOString(),
-    reference: `REFUND-${session.id}`
-  };
-  transactions.unshift(refundTxn);
+
+  const sessionClient = getUserById(session.clientId);
+  let balance = clientWalletBalance;
+  if (!isInstitutionalClient(sessionClient)) {
+    clientWalletBalance += session.cost;
+    balance = clientWalletBalance;
+
+    const refundTxn: Transaction = {
+      id: `tx_ref_${Math.random().toString(36).substr(2, 9)}`,
+      userId: sessionClient?.id || session.clientId,
+      userName: sessionClient?.name || session.clientName,
+      type: "refund",
+      amount: session.cost,
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      reference: `REFUND-${session.id}`
+    };
+    transactions.unshift(refundTxn);
+  }
 
   session.chatMessages.push({
     id: `msg_reject_${Date.now()}`,
@@ -882,15 +1052,20 @@ app.post("/api/sessions/:id/reject", (req, res) => {
     timestamp: new Date().toISOString()
   });
 
-  logAction(`Call session ${id} was rejected/ended. Retainer of ${session.cost} ETB refunded to Dawit Yohannes.`, "system", "Processor", "warning");
-  res.json({ session, balance: clientWalletBalance });
+  logAction(`Call session ${id} was rejected/ended. Retainer of ${session.cost} ETB refunded to ${session.clientName}.`, "system", "Processor", "warning");
+  res.json({ session, balance });
 });
 
 // Post an active session request (Immediate or Scheduled)
 app.post("/api/sessions/request", (req, res) => {
-  const { languageFrom, languageTo, serviceType, serviceMode, scheduledTime, cost } = req.body;
-  
-  const contract = checkAndGetContract();
+  const { languageFrom, languageTo, serviceType, serviceMode, scheduledTime, cost, clientId } = req.body;
+
+  const { client, error } = resolveClientProfile(clientId);
+  if (error) {
+    return res.status(400).json({ error });
+  }
+
+  const contract = getContractForClient(client);
   if (contract.status === "expired") {
     return res.status(400).json({ error: "Access Denied: Your corporate SLA Contract duration has expired. Please contact an Administrator to extend validity." });
   }
@@ -904,8 +1079,8 @@ app.post("/api/sessions/request", (req, res) => {
   const isAIOnly = serviceMode === "AI";
   const newSession: Session = {
     id: `sess_${Math.floor(1000 + Math.random() * 9000)}`,
-    clientId: "usr_client13",
-    clientName: "Dawit Yohannes",
+    clientId: client!.id,
+    clientName: client!.name,
     interpreterId: isAIOnly ? "usr_orzo_ai" : matchedInt?.id,
     interpreterName: isAIOnly ? "ORZO AI Neural Interpreter" : matchedInt?.name,
     languageFrom,
@@ -924,20 +1099,21 @@ app.post("/api/sessions/request", (req, res) => {
 
   sessions.unshift(newSession);
 
-  // Log financial transaction for session fee hold
-  const txn: Transaction = {
-    id: `tx_pay_${Math.random().toString(36).substr(2, 9)}`,
-    userId: "usr_client13",
-    userName: "Dawit Yohannes",
-    type: "payment",
-    amount: cost,
-    status: "completed",
-    timestamp: new Date().toISOString(),
-    reference: `RESERVE-${newSession.id}`
-  };
-  transactions.unshift(txn);
+  if (parsedCost > 0 && !isInstitutionalClient(client)) {
+    const txn: Transaction = {
+      id: `tx_pay_${Math.random().toString(36).substr(2, 9)}`,
+      userId: client!.id,
+      userName: client!.name,
+      type: "payment",
+      amount: cost,
+      status: "completed",
+      timestamp: new Date().toISOString(),
+      reference: `RESERVE-${newSession.id}`
+    };
+    transactions.unshift(txn);
+  }
 
-  logAction(`New interpretation session requested (${languageFrom} <-> ${languageTo}) via ${serviceMode} mode. Cost: ${cost} ETB`, "client", "Dawit Yohannes", "info");
+  logAction(`New interpretation session requested (${languageFrom} <-> ${languageTo}) via ${serviceMode} mode. Cost: ${cost} ETB`, "client", client!.name, "info");
 
   res.json({ session: newSession, balance: clientWalletBalance });
 });
@@ -1291,6 +1467,7 @@ const startServer = async () => {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Ethiopian Interpretation Platform server running at http://localhost:${PORT}`);
     console.log("Interpreter registration: POST /api/users/interpreters/create");
+    console.log("Institution client registration: POST /api/users/clients/create");
   });
 };
 

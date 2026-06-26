@@ -26,6 +26,20 @@ class Profile(models.Model):
     hourly_rate = models.DecimalField(max_digits=8, decimal_places=2, default=40.0)
     avatar = models.URLField(blank=True, default="")
     wallet_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    contract = models.ForeignKey(
+        "ContractDetails",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="client_profiles",
+    )
+    is_institution_primary = models.BooleanField(default=False)
+    provisioned_password = models.CharField(max_length=128, blank=True, default="")
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["contract", "role"]),
+        ]
 
     def __str__(self):
         return f"{self.external_id} ({self.role})"

@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { User, Session, Transaction, AuditLog, InterpreterAvailability, ContractDetails } from "./types";
 import { mergeUsersWithLocal, registerInterpreter } from "./lib/interpreterRegistration";
+import { mergeUsersWithLocalClients, registerInstitutionClient } from "./lib/clientRegistration";
 import AdminDashboard from "./components/AdminDashboard";
 import ClientDashboard from "./components/ClientDashboard";
 import InterpreterDashboard from "./components/InterpreterDashboard";
@@ -61,11 +62,16 @@ export default function App() {
   // Auto update poller
   const fetchState = async () => {
     try {
-      const res = await fetch("/api/init");
+      const clientId =
+        authenticatedUser?.role === "client" ? authenticatedUser.id : undefined;
+      const initUrl = clientId
+        ? `/api/init?clientId=${encodeURIComponent(clientId)}`
+        : "/api/init";
+      const res = await fetch(initUrl);
       const contentType = res.headers.get("content-type");
       if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();
-        setUsers(mergeUsersWithLocal(data.users || []));
+        setUsers(mergeUsersWithLocalClients(mergeUsersWithLocal(data.users || [])));
         setSessions(data.sessions || []);
         setTransactions(data.transactions || []);
         setAvailabilities(data.availabilities || []);
@@ -100,7 +106,7 @@ export default function App() {
     fetchState();
     const interval = setInterval(fetchState, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [authenticatedUser?.id]);
 
   const handleLoginSuccess = (user: User, workspaceRole: User["role"]) => {
     const role = user.role === workspaceRole ? workspaceRole : user.role;
@@ -113,6 +119,16 @@ export default function App() {
   const handleRegisterInterpreter = async (
     payload: Parameters<typeof registerInterpreter>[0]
   ) => registerInterpreter(payload, users);
+
+  const handleRegisterInstitutionClient = async (
+    payload: Parameters<typeof registerInstitutionClient>[0]
+  ) => registerInstitutionClient(payload, users, contractsList);
+
+  const userContractDetails =
+    authenticatedUser?.contractId
+      ? contractsList.find((c) => c.contractId === authenticatedUser.contractId) || null
+      : null;
+  const clientContractDetails = userContractDetails || contractDetails;
 
   const handleLogout = () => {
     playBeepTone(440, 150);
@@ -373,9 +389,10 @@ export default function App() {
                   sessions={sessions}
                   transactions={transactions}
                   walletBalance={walletBalance}
-                  contractDetails={contractDetails}
+                  contractDetails={clientContractDetails}
                   contractsList={contractsList}
                   activeContractId={activeContractId}
+                  currentUser={authenticatedUser}
                   onActionComplete={fetchState}
                   theme={theme}
                 />
@@ -401,6 +418,7 @@ export default function App() {
                   activeContractId={activeContractId}
                   onActionComplete={fetchState}
                   onRegisterInterpreter={handleRegisterInterpreter}
+                  onRegisterInstitutionClient={handleRegisterInstitutionClient}
                   theme={theme}
                 />
               )}

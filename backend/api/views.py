@@ -27,13 +27,16 @@ from .services import gemini
 from .services.interpreter_matching import can_interpreter_accept_session
 from .utils import (
     check_and_get_contract,
+    get_contract_for_client,
     get_default_client_profile,
     get_profile_by_external_id,
     get_wallet_balance,
+    is_institutional_client,
     log_action,
     new_id,
     new_log_id,
     new_tx_id,
+    resolve_client_profile,
     serialize_audit_log,
     serialize_availability,
     serialize_chat_message,
@@ -60,7 +63,7 @@ class AuthLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        user = User.objects.filter(email__iexact=email).select_related("profile").first()
+        user = User.objects.filter(email__iexact=email).select_related("profile", "profile__contract").first()
         if not user or not hasattr(user, "profile"):
             return Response(
                 {"error": "Invalid email or authorization pin."},
@@ -108,8 +111,17 @@ class AuthLoginView(APIView):
 
 class InitView(APIView):
     def get(self, request):
-        contract = check_and_get_contract()
-        profiles = Profile.objects.select_related("user").all()
+        client_id = request.query_params.get("clientId")
+        contract = None
+        if client_id:
+            profile = get_profile_by_external_id(client_id)
+            if profile and profile.contract_id:
+                contract = get_contract_for_client(profile)
+
+        if not contract:
+            contract = check_and_get_contract()
+
+        profiles = Profile.objects.select_related("user", "contract").all()
         return Response(
             {
                 "users": [serialize_user(p) for p in profiles],
@@ -137,7 +149,12 @@ class SessionsListView(APIView):
 
 class SessionRequestView(APIView):
     def post(self, request):
-        contract = check_and_get_contract()
+        client_id = request.data.get("clientId")
+        client_profile, client_error = resolve_client_profile(client_id)
+        if client_error:
+            return Response({"error": client_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        contract = get_contract_for_client(client_profile)
         if not contract or contract.status == "expired":
             return Response(
                 {"error": "Access Denied: Your corporate SLA Contract duration has expired."},
@@ -151,7 +168,6 @@ class SessionRequestView(APIView):
         scheduled_time = request.data.get("scheduledTime", "instant")
         cost = Decimal(str(request.data.get("cost", 0)))
 
-        client_profile = get_default_client_profile()
         if not client_profile:
             return Response({"error": "No client profile configured."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -207,7 +223,7 @@ class SessionRequestView(APIView):
             text=init_text,
         )
 
-        if cost > 0:
+        if cost > 0 and not is_institutional_client(client_profile):
             Transaction.objects.create(
                 id=new_tx_id("tx_pay"),
                 user=client_profile.user,
@@ -229,7 +245,12 @@ class SessionRequestView(APIView):
 
 class CallDialView(APIView):
     def post(self, request):
-        contract = check_and_get_contract()
+        client_id = request.data.get("clientId")
+        client_profile, client_error = resolve_client_profile(client_id)
+        if client_error:
+            return Response({"error": client_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        contract = get_contract_for_client(client_profile)
         if not contract or contract.status == "expired":
             return Response(
                 {"error": "Access Denied: Your corporate SLA Contract duration has expired."},
@@ -243,7 +264,9 @@ class CallDialView(APIView):
         service_mode = request.data.get("serviceMode", "Both")
         cost = Decimal(str(request.data.get("cost", 350)))
 
-        client_profile = get_default_client_profile()
+        if not client_profile:
+            return Response({"error": "No client profile configured."}, status=status.HTTP_400_BAD_REQUEST)
+
         target = get_profile_by_external_id(interpreter_id) if interpreter_id else None
 
         session = Session.objects.create(
@@ -269,15 +292,16 @@ class CallDialView(APIView):
             text=f"Direct speed-dial calling established. Pinging {session.interpreter_name}...",
         )
 
-        Transaction.objects.create(
-            id=new_tx_id("tx_dial"),
-            user=client_profile.user,
-            user_name=client_profile.user.get_full_name(),
-            type="payment",
-            amount=cost,
-            status="completed",
-            reference=f"RESERVE-{session.id}",
-        )
+        if not is_institutional_client(client_profile):
+            Transaction.objects.create(
+                id=new_tx_id("tx_dial"),
+                user=client_profile.user,
+                user_name=client_profile.user.get_full_name(),
+                type="payment",
+                amount=cost,
+                status="completed",
+                reference=f"RESERVE-{session.id}",
+            )
 
         log_action(
             f"Direct ring call initiated to: {session.interpreter_name} ({language_from} ⇆ {language_to}).",
@@ -360,19 +384,21 @@ class SessionRejectView(APIView):
 
         WebRTCSignal.objects.filter(session=session).delete()
 
-        client_profile = get_default_client_profile()
-        balance = get_wallet_balance() + float(session.cost)
-        set_wallet_balance(balance)
+        client_profile = getattr(session.client, "profile", None) or get_default_client_profile()
+        balance = get_wallet_balance()
+        if client_profile and not is_institutional_client(client_profile):
+            balance = get_wallet_balance() + float(session.cost)
+            set_wallet_balance(balance)
 
-        Transaction.objects.create(
-            id=new_tx_id("tx_ref"),
-            user=client_profile.user,
-            user_name=client_profile.user.get_full_name(),
-            type="refund",
-            amount=session.cost,
-            status="completed",
-            reference=f"REFUND-{session.id}",
-        )
+            Transaction.objects.create(
+                id=new_tx_id("tx_ref"),
+                user=client_profile.user,
+                user_name=client_profile.user.get_full_name(),
+                type="refund",
+                amount=session.cost,
+                status="completed",
+                reference=f"REFUND-{session.id}",
+            )
 
         ChatMessage.objects.create(
             session=session,
@@ -489,19 +515,21 @@ class SessionCompleteView(APIView):
 
         session.save()
 
-        client_profile = get_default_client_profile()
-        balance = get_wallet_balance() - float(session.cost)
-        set_wallet_balance(max(balance, 0))
+        client_profile = getattr(session.client, "profile", None) or get_default_client_profile()
+        balance = get_wallet_balance()
+        if client_profile and not is_institutional_client(client_profile):
+            balance = get_wallet_balance() - float(session.cost)
+            set_wallet_balance(max(balance, 0))
 
-        Transaction.objects.create(
-            id=new_tx_id("tx_pay"),
-            user=client_profile.user,
-            user_name=client_profile.user.get_full_name(),
-            type="payment",
-            amount=session.cost,
-            status="completed",
-            reference=f"SESS-{session.id}-PAY",
-        )
+            Transaction.objects.create(
+                id=new_tx_id("tx_pay"),
+                user=client_profile.user,
+                user_name=client_profile.user.get_full_name(),
+                type="payment",
+                amount=session.cost,
+                status="completed",
+                reference=f"SESS-{session.id}-PAY",
+            )
 
         if session.interpreter and hasattr(session.interpreter, "profile"):
             payout_amount = (session.cost * Decimal("0.85")).quantize(Decimal("0.01"))
@@ -567,6 +595,16 @@ class SessionInterveneView(APIView):
 
 class WalletDepositView(APIView):
     def post(self, request):
+        client_id = request.data.get("clientId")
+        client_profile, client_error = resolve_client_profile(client_id)
+        if client_error:
+            return Response({"error": client_error}, status=status.HTTP_400_BAD_REQUEST)
+        if client_profile and is_institutional_client(client_profile):
+            return Response(
+                {"error": "Institutional accounts use offline billing. Wallet top-up is not available."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         amount = request.data.get("amount")
         reference = request.data.get("reference")
         try:
@@ -580,7 +618,8 @@ class WalletDepositView(APIView):
         balance = get_wallet_balance() + float(parsed)
         set_wallet_balance(balance)
 
-        client_profile = get_default_client_profile()
+        if not client_profile:
+            client_profile = get_default_client_profile()
         ref = reference or f"CHP-{random.randint(100000, 999999)}"
         txn = Transaction.objects.create(
             id=new_tx_id("tx_dep"),
@@ -861,6 +900,7 @@ class InterpreterCreateView(APIView):
             languages=[lang for lang in languages if isinstance(lang, str) and lang.strip()],
             hourly_rate=parsed_rate,
             avatar=avatar,
+            provisioned_password=password,
         )
 
         admin_name = (request.data.get("adminName") or "Administrator").strip()
@@ -879,6 +919,105 @@ class InterpreterCreateView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class ClientCreateView(APIView):
+    """Admin-only endpoint to register an institution primary or staff client account."""
+
+    def post(self, request):
+        name = (request.data.get("name") or "").strip()
+        email = (request.data.get("email") or "").strip()
+        password = request.data.get("password") or "demo1234"
+        contract_id = (request.data.get("contractId") or "").strip()
+        is_primary = bool(request.data.get("isInstitutionPrimary"))
+        account_status = request.data.get("status") or "active"
+
+        if not name:
+            return Response({"error": "Client name is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not email:
+            return Response({"error": "Email address is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not contract_id:
+            return Response({"error": "Institution contract is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        contract = ContractDetails.objects.filter(contract_id=contract_id).first()
+        if not contract:
+            return Response({"error": "Institution contract not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        contract.refresh_status()
+        contract.save(update_fields=["status"])
+        if contract.status == "expired":
+            return Response(
+                {"error": "Cannot create client for an expired institution contract."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if is_primary and Profile.objects.filter(
+            contract=contract, role="client", is_institution_primary=True
+        ).exists():
+            return Response(
+                {"error": "A primary org account already exists for this institution."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"error": "An account with this email already exists."}, status=status.HTTP_409_CONFLICT)
+
+        if account_status not in ("active", "pending", "suspended"):
+            account_status = "active"
+
+        external_id = new_id("usr_client")
+        while Profile.objects.filter(external_id=external_id).exists():
+            external_id = new_id("usr_client")
+
+        parts = name.split(" ", 1)
+        user = User.objects.create_user(
+            username=external_id,
+            email=email,
+            password=password,
+            first_name=parts[0],
+            last_name=parts[1] if len(parts) > 1 else "",
+        )
+
+        profile = Profile.objects.create(
+            user=user,
+            external_id=external_id,
+            role="client",
+            status=account_status,
+            contract=contract,
+            is_institution_primary=is_primary,
+            provisioned_password=password,
+        )
+
+        admin_name = (request.data.get("adminName") or "Administrator").strip()
+        account_label = "primary org" if is_primary else "staff"
+        log_action(
+            f"New institution {account_label} client registered: {user.get_full_name()} ({contract.organization_name})",
+            "admin",
+            admin_name,
+            "success",
+        )
+
+        profile = Profile.objects.select_related("user", "contract").get(pk=profile.pk)
+        return Response(
+            {
+                "success": True,
+                "user": serialize_user(profile),
+                "temporaryPassword": password if password == "demo1234" else None,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class InstitutionClientsListView(APIView):
+    """Admin-only listing of client accounts under one institution contract."""
+
+    def get(self, request, contract_id):
+        contract = ContractDetails.objects.filter(contract_id=contract_id).first()
+        if not contract:
+            return Response({"error": "Contract not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        profiles = Profile.objects.filter(contract=contract, role="client").select_related("user", "contract")
+        return Response({"clients": [serialize_user(p) for p in profiles]})
 
 
 class SchedulerUpdateView(APIView):
