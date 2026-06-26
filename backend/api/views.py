@@ -33,6 +33,7 @@ from .utils import (
     get_wallet_balance,
     is_institutional_client,
     log_action,
+    normalize_interpreter_languages,
     new_id,
     new_log_id,
     new_tx_id,
@@ -175,7 +176,7 @@ class SessionRequestView(APIView):
             (
                 p
                 for p in Profile.objects.filter(role="interpreter", status="active").select_related("user")
-                if language_from in (p.languages or [])
+                if language_from in normalize_interpreter_languages(p.languages)
             ),
             None,
         )
@@ -488,11 +489,12 @@ class SessionCompleteView(APIView):
         transcript = request.data.get("transcript")
         summary = request.data.get("summary", "")
 
+        was_completed = session.status == "completed"
         session.status = "completed"
         session.duration_seconds = int(duration) if duration else max(session.duration_seconds, 400)
         if rating is not None:
             session.rating_by_client = int(rating)
-        if review:
+        if "review" in request.data:
             session.review_by_client = review
         if transcript:
             session.transcript = transcript
@@ -505,8 +507,9 @@ class SessionCompleteView(APIView):
         hourly_rate = Decimal("40")
         if session.interpreter and hasattr(session.interpreter, "profile"):
             hourly_rate = session.interpreter.profile.hourly_rate
-            session.interpreter.profile.completed_sessions += 1
-            session.interpreter.profile.save(update_fields=["completed_sessions"])
+            if not was_completed:
+                session.interpreter.profile.completed_sessions += 1
+                session.interpreter.profile.save(update_fields=["completed_sessions"])
 
         hours = Decimal(session.duration_seconds) / Decimal(3600)
         computed_cost = float((hours * hourly_rate).quantize(Decimal("0.01")))
@@ -517,7 +520,7 @@ class SessionCompleteView(APIView):
 
         client_profile = getattr(session.client, "profile", None) or get_default_client_profile()
         balance = get_wallet_balance()
-        if client_profile and not is_institutional_client(client_profile):
+        if not was_completed and client_profile and not is_institutional_client(client_profile):
             balance = get_wallet_balance() - float(session.cost)
             set_wallet_balance(max(balance, 0))
 
@@ -531,7 +534,7 @@ class SessionCompleteView(APIView):
                 reference=f"SESS-{session.id}-PAY",
             )
 
-        if session.interpreter and hasattr(session.interpreter, "profile"):
+        if not was_completed and session.interpreter and hasattr(session.interpreter, "profile"):
             payout_amount = (session.cost * Decimal("0.85")).quantize(Decimal("0.01"))
             Transaction.objects.create(
                 id=new_tx_id("tx"),

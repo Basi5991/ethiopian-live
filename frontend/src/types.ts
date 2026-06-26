@@ -5,6 +5,7 @@ export interface User {
   role: "admin" | "client" | "interpreter";
   status: "active" | "suspended" | "pending";
   languages?: string[];
+  languageProficiencies?: LanguageProficiency[];
   rating?: number;
   completedSessions?: number;
   hourlyRate?: number;
@@ -13,6 +14,11 @@ export interface User {
   organizationName?: string;
   isInstitutionPrimary?: boolean;
   provisionedPassword?: string;
+}
+
+export interface LanguageProficiency {
+  language: string;
+  level: string;
 }
 
 export interface ChatMessage {

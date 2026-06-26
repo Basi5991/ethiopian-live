@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..utils import normalize_interpreter_languages
+
 if TYPE_CHECKING:
     from ..models import Profile, Session
 
@@ -11,7 +13,7 @@ if TYPE_CHECKING:
 def interpreter_speaks_language(languages: list | None, language: str) -> bool:
     if not languages or not language:
         return False
-    return language in languages
+    return language in normalize_interpreter_languages(languages)
 
 
 def interpreter_supports_language_pair(

@@ -7,6 +7,7 @@ import {
 import { User, Session, Transaction, AuditLog, ContractDetails } from "../types";
 import { RegisterInterpreterPayload, RegisterInterpreterResult } from "../lib/interpreterRegistration";
 import { RegisterClientPayload, RegisterClientResult } from "../lib/clientRegistration";
+import { formatLanguageProficiencies } from "../lib/interpreterMatching";
 
 // Simple audio feedback helper
 const playBeepTone = (frequency: number, durationMs: number) => {
@@ -1438,7 +1439,9 @@ export default function AdminDashboard({
                     )}
                   </td>
                   <td className="p-4 font-mono text-[11px] text-slate-400">
-                    {user.languages ? user.languages.join(", ") : "—"}
+                    {user.role === "interpreter"
+                      ? formatLanguageProficiencies(user.languages, user.languageProficiencies)
+                      : "—"}
                   </td>
                   <td className="p-4">
                     {user.role === "interpreter" ? (

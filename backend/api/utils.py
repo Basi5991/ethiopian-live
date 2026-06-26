@@ -23,6 +23,36 @@ def new_log_id() -> str:
     return f"log_{uuid.uuid4().hex[:9]}"
 
 
+def normalize_interpreter_languages(languages: list | None) -> list[str]:
+    """Return flat language names from string or {language, level} entries."""
+    if not languages:
+        return []
+    codes: list[str] = []
+    for item in languages:
+        if isinstance(item, str) and item.strip():
+            codes.append(item.strip())
+        elif isinstance(item, dict):
+            lang = (item.get("language") or item.get("name") or "").strip()
+            if lang:
+                codes.append(lang)
+    return codes
+
+
+def serialize_language_proficiencies(languages: list | None) -> list[dict]:
+    if not languages:
+        return []
+    proficiencies: list[dict] = []
+    for item in languages:
+        if isinstance(item, str) and item.strip():
+            proficiencies.append({"language": item.strip(), "level": "Accredited"})
+        elif isinstance(item, dict):
+            lang = (item.get("language") or item.get("name") or "").strip()
+            level = (item.get("level") or item.get("proficiency") or "Accredited").strip()
+            if lang:
+                proficiencies.append({"language": lang, "level": level})
+    return proficiencies
+
+
 def log_action(action: str, user_role: str, user_name: str, status: str = "info") -> AuditLog:
     return AuditLog.objects.create(
         id=new_log_id(),
@@ -97,7 +127,9 @@ def serialize_user(profile: Profile) -> dict:
         "status": profile.status,
     }
     if profile.role == "interpreter":
-        data["languages"] = profile.languages or []
+        proficiencies = serialize_language_proficiencies(profile.languages)
+        data["languageProficiencies"] = proficiencies
+        data["languages"] = [entry["language"] for entry in proficiencies]
         data["rating"] = float(profile.rating)
         data["completedSessions"] = profile.completed_sessions
         data["hourlyRate"] = float(profile.hourly_rate)

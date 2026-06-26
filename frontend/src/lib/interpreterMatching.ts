@@ -1,21 +1,53 @@
-import { Session } from "../types";
+import { LanguageProficiency, Session } from "../types";
+
+type LanguageEntry = string | LanguageProficiency | Record<string, unknown>;
+
+/** Return flat language names from string or {language, level} entries. */
+export function normalizeInterpreterLanguages(
+  languages: LanguageEntry[] | undefined
+): string[] {
+  if (!languages?.length) return [];
+  const codes: string[] = [];
+  for (const item of languages) {
+    if (typeof item === "string" && item.trim()) {
+      codes.push(item.trim());
+    } else if (item && typeof item === "object") {
+      const lang = String(
+        (item as LanguageProficiency).language ||
+          (item as Record<string, unknown>).name ||
+          ""
+      ).trim();
+      if (lang) codes.push(lang);
+    }
+  }
+  return codes;
+}
+
+export function formatLanguageProficiencies(
+  languages: LanguageEntry[] | undefined,
+  proficiencies?: LanguageProficiency[]
+): string {
+  if (proficiencies?.length) {
+    return proficiencies.map((p) => `${p.language} (${p.level})`).join(", ");
+  }
+  return normalizeInterpreterLanguages(languages).join(", ");
+}
 
 /** Interpreter must list the language in their profile. */
 export function interpreterSpeaksLanguage(
-  languages: string[] | undefined,
+  languages: LanguageEntry[] | undefined,
   language: string
 ): boolean {
-  if (!languages?.length || !language) return false;
-  return languages.includes(language);
+  if (!language) return false;
+  return normalizeInterpreterLanguages(languages).includes(language);
 }
 
 /** Interpreter must speak both sides of the requested pair. */
 export function interpreterSupportsLanguagePair(
-  languages: string[] | undefined,
+  languages: LanguageEntry[] | undefined,
   languageFrom: string,
   languageTo: string
 ): boolean {
-  if (!languages?.length) return false;
   return (
     interpreterSpeaksLanguage(languages, languageFrom) &&
     interpreterSpeaksLanguage(languages, languageTo)
@@ -26,7 +58,7 @@ export function interpreterSupportsLanguagePair(
 export function isIncomingCallForInterpreter(
   session: Pick<Session, "status" | "interpreterId" | "scheduledTime" | "languageFrom" | "languageTo">,
   interpreterId: string,
-  interpreterLanguages: string[] | undefined
+  interpreterLanguages: LanguageEntry[] | undefined
 ): boolean {
   if (session.status !== "incoming") return false;
 
@@ -47,7 +79,7 @@ export function isIncomingCallForInterpreter(
 export function findIncomingSessionForInterpreter(
   sessions: Session[],
   interpreterId: string,
-  interpreterLanguages: string[] | undefined,
+  interpreterLanguages: LanguageEntry[] | undefined,
   dismissedSessionId?: string | null
 ): Session | undefined {
   return sessions.find(

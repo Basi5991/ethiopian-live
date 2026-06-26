@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   CreditCard, Send, Clock, Shield, RefreshCw,
   PhoneCall, PhoneOff, Wifi, Star, Sparkle, Sparkles,
@@ -64,9 +64,9 @@ const INTERPRETER_EXT: Record<string, string> = {
   usr_int2: "0912",
   usr_int3: "0913",
   usr_int4: "0914",
+  usr_int5: "0915",
+  usr_int6: "0916",
 };
-
-const MATCH_CANDIDATE_IDS = ["usr_int1", "usr_int4"];
 
 function ClientBannerSkyline() {
   return (
@@ -189,6 +189,10 @@ export default function ClientDashboard({
   const [rating, setRating] = useState(5);
   const [reviewText, setReviewText] = useState("");
   const [feedbackSuccess, setFeedbackSuccess] = useState(false);
+  const [ratingSession, setRatingSession] = useState<Session | null>(null);
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const promptedRatingSessionIds = useRef<Set<string>>(new Set());
+  const ratingWatcherInitialized = useRef(false);
 
   // Smart Match Engine Recommendation Recommendation
   const [smartMatching, setSmartMatching] = useState(false);
@@ -218,6 +222,20 @@ export default function ClientDashboard({
     });
   };
 
+  const openRatingPopup = (session: Session) => {
+    setRatingSession(session);
+    setRating(session.ratingByClient ?? 5);
+    setReviewText(session.reviewByClient ?? "");
+    setFeedbackSuccess(false);
+  };
+
+  const closeRatingPopup = () => {
+    setRatingSession(null);
+    setFeedbackSuccess(false);
+    setReviewText("");
+    setRating(5);
+  };
+
   // Watch sessions for active patient context
   useEffect(() => {
     const live = sessions.find(
@@ -239,6 +257,31 @@ export default function ClientDashboard({
       return prev;
     });
   }, [sessions, clientId, dismissedSessionId]);
+
+  useEffect(() => {
+    const completedSessions = sessions.filter(
+      (session) => session.clientId === clientId && session.status === "completed"
+    );
+
+    if (!ratingWatcherInitialized.current) {
+      if (sessions.length === 0) return;
+      completedSessions.forEach((session) => promptedRatingSessionIds.current.add(session.id));
+      ratingWatcherInitialized.current = true;
+      return;
+    }
+
+    const newlyCompleted = completedSessions.find(
+      (session) => !promptedRatingSessionIds.current.has(session.id)
+    );
+
+    if (newlyCompleted) {
+      promptedRatingSessionIds.current.add(newlyCompleted.id);
+      if (activeSession?.id === newlyCompleted.id) {
+        setActiveSession(null);
+      }
+      openRatingPopup(newlyCompleted);
+    }
+  }, [sessions, clientId, activeSession?.id]);
 
   // Outgoing Dialing Ringer Loop
   useEffect(() => {
@@ -419,6 +462,8 @@ export default function ClientDashboard({
     else if (dialCode === "0912") targetId = "usr_int2"; // Haleema Bashir
     else if (dialCode === "0913") targetId = "usr_int3"; // Yared Girmay
     else if (dialCode === "0914" || dialCode === "310") targetId = "usr_int4"; // Selamawit Tadesse
+    else if (dialCode === "0915") targetId = "usr_int5"; // Fatuma Ali
+    else if (dialCode === "0916") targetId = "usr_int6"; // Lemma Hailu
     else {
       const found = users.find(u => u.role === "interpreter" && u.name.toLowerCase().includes(dialCode.toLowerCase()));
       if (found) targetId = found.id;
@@ -428,7 +473,7 @@ export default function ClientDashboard({
       handleDirectDialExt(targetId);
       setDialCode("");
     } else {
-      setWizardError(`Invalid extension extension code "${dialCode}". Dial 0911, 0912, 0913 or 0914.`);
+      setWizardError(`Invalid extension extension code "${dialCode}". Dial 0911, 0912, 0913, 0914, 0915, or 0916.`);
       playBeepTone(150, 400); // Fail buzzer
     }
   };
@@ -517,31 +562,37 @@ export default function ClientDashboard({
   // Ratings submit
   const handleRatingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeSession) return;
+    const sessionToRate = ratingSession || activeSession;
+    if (!sessionToRate) return;
 
+    setIsSubmittingRating(true);
     try {
-      const res = await fetch(`/api/sessions/${activeSession.id}/complete`, {
+      const res = await fetch(`/api/sessions/${sessionToRate.id}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rating,
           review: reviewText,
-          transcript: activeSession.chatMessages.map(m => `[${m.senderName}]: ${m.text}`),
+          transcript: sessionToRate.chatMessages.map(m => `[${m.senderName}]: ${m.text}`),
           summary: `Clinical user verified interpretation complete. Rating: ${rating} Stars.`
         })
       });
 
       if (res.ok) {
+        const data = await res.json();
+        const updatedSession = data.session || data;
+        promptedRatingSessionIds.current.add(updatedSession.id || sessionToRate.id);
         setFeedbackSuccess(true);
         setTimeout(() => {
-          setFeedbackSuccess(false);
+          closeRatingPopup();
           setActiveSession(null);
-          setReviewText("");
         }, 3000);
         onActionComplete();
       }
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsSubmittingRating(false);
     }
   };
 
@@ -550,9 +601,45 @@ export default function ClientDashboard({
     clearCallMedia();
   };
 
+  const completeSessionAndOpenRating = async (session: Session) => {
+    setDismissedSessionId(session.id);
+    setActiveSession(null);
+    clearCallMedia();
+
+    try {
+      const res = await fetch(`/api/sessions/${session.id}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transcript: session.chatMessages.map(m => `[${m.senderName}]: ${m.text}`),
+          summary: "Client ended secure interpretation call. Awaiting post-call feedback.",
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const completedSession = data.session || { ...session, status: "completed" as const };
+        promptedRatingSessionIds.current.add(completedSession.id);
+        openRatingPopup(completedSession);
+        onActionComplete();
+        playBeepTone(880, 120);
+        return;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+
+    openRatingPopup({ ...session, status: "completed" });
+  };
+
   // Cancel call or refund
   const handleCancelCall = async () => {
     if (!activeSession) return;
+    if (activeSession.status === "active") {
+      await completeSessionAndOpenRating(activeSession);
+      return;
+    }
+
     const sessionId = activeSession.id;
     setDismissedSessionId(sessionId);
     setActiveSession(null);
@@ -742,9 +829,8 @@ export default function ClientDashboard({
     }
   };
 
-  const matchCandidates = MATCH_CANDIDATE_IDS
-    .map((id) => users.find((u) => u.id === id))
-    .filter((u): u is User => Boolean(u))
+  const matchCandidates = users
+    .filter((u): u is User => u.role === "interpreter")
     .filter((u) => interpreterSupportsLanguagePair(u.languages, langFrom, langTo));
 
   const contractDaysValid = contractDetails
@@ -769,10 +855,10 @@ export default function ClientDashboard({
         <ClientBannerSkyline />
         <div className="relative z-10 max-w-[62%] space-y-3">
           <h2 className={`text-xl sm:text-2xl font-bold tracking-tight ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-            👋 Selam, {currentUser?.name || "Client Partner"}!
+            Selam, {currentUser?.name || "Client Partner"}.
           </h2>
           <p className={`text-sm leading-relaxed ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-            Welcome to your dedicated Elliot translation portal. Instantly dispatch real-time translators, schedule clinical sessions, or interact with our smart language assistant.
+            Choose languages, press start, and connect with an interpreter.
           </p>
           <div className={`flex flex-wrap items-center gap-4 pt-1 text-xs ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
             <span className="inline-flex items-center gap-1.5">
@@ -817,47 +903,47 @@ export default function ClientDashboard({
         )}
       </div>
 
-      {/* Navigation tab cards */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Simple navigation */}
+      <div className={`rounded-2xl border p-1.5 grid grid-cols-3 gap-1.5 ${cardSurface}`}>
         <button
           type="button"
           onClick={() => { setDashboardSlide("terminal"); playBeepTone(400, 50); }}
-          className={`rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
             dashboardSlide === "terminal"
-              ? "border-blue-200 bg-blue-50/80 ring-1 ring-blue-200"
-              : `${cardSurface} hover:border-blue-100`
+              ? "bg-blue-600 text-white shadow-sm"
+              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
           }`}
         >
-          <Zap className={`w-5 h-5 mb-2 ${dashboardSlide === "terminal" ? "text-blue-600" : "text-blue-500"}`} />
-          <span className={`block text-sm font-bold ${dashboardSlide === "terminal" ? "text-blue-700" : theme === "light" ? "text-slate-700" : "text-slate-300"}`}>
-            Dispatch
+          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
+            <PhoneCall className="w-4 h-4" />
+            Call Interpreter
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("ai"); playBeepTone(420, 50); }}
-          className={`rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
             dashboardSlide === "ai"
-              ? "border-purple-200 bg-purple-50/80 ring-1 ring-purple-200"
-              : `${cardSurface} hover:border-purple-100`
+              ? "bg-purple-600 text-white shadow-sm"
+              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
           }`}
         >
-          <Bot className={`w-5 h-5 mb-2 ${dashboardSlide === "ai" ? "text-purple-600" : "text-purple-500"}`} />
-          <span className={`block text-sm font-bold ${dashboardSlide === "ai" ? "text-purple-700" : theme === "light" ? "text-slate-700" : "text-slate-300"}`}>
-            AI Hub
+          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
+            <Bot className="w-4 h-4" />
+            AI Help
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("billing"); playBeepTone(440, 50); }}
-          className={`rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
             dashboardSlide === "billing"
-              ? "border-emerald-200 bg-emerald-50/80 ring-1 ring-emerald-200"
-              : `${cardSurface} hover:border-emerald-100`
+              ? "bg-emerald-600 text-white shadow-sm"
+              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
           }`}
         >
-          <CreditCard className={`w-5 h-5 mb-2 ${dashboardSlide === "billing" ? "text-emerald-600" : "text-emerald-500"}`} />
-          <span className={`block text-sm font-bold ${dashboardSlide === "billing" ? "text-emerald-700" : theme === "light" ? "text-slate-700" : "text-slate-300"}`}>
+          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
+            <CreditCard className="w-4 h-4" />
             Billing & SLA
           </span>
         </button>
@@ -891,8 +977,16 @@ export default function ClientDashboard({
                       remoteLabel={`Active: ${activeSession.interpreterName || "Interpreter"}`}
                       onEndCall={handleCancelCall}
                       onPeerHangup={(sessionId) => {
-                        setDismissedSessionId(sessionId);
-                        endSessionLocally();
+                        const completedCandidate =
+                          activeSession?.id === sessionId
+                            ? activeSession
+                            : sessions.find((session) => session.id === sessionId);
+                        if (completedCandidate?.status === "active") {
+                          completeSessionAndOpenRating(completedCandidate);
+                        } else {
+                          setDismissedSessionId(sessionId);
+                          endSessionLocally();
+                        }
                       }}
                     />
                     </div>
@@ -1041,95 +1135,155 @@ export default function ClientDashboard({
         {dashboardSlide === "terminal" && (
           <div className="col-span-12 space-y-5 animate-fade-in">
 
-          <div className={`rounded-2xl border p-6 ${cardSurface}`}>
-            <h3 className={`text-base font-bold mb-5 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-              ⚡ Quick Connection Channel
-            </h3>
+          <div className={`rounded-3xl border p-5 sm:p-7 ${cardSurface}`}>
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
+              <div>
+                <h3 className={`text-xl font-black tracking-tight ${theme === "light" ? "text-slate-900" : "text-white"}`}>
+                  Start Interpreter Call
+                </h3>
+                <p className={`text-sm mt-1 ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
+                  Pick languages and press start. We will route you to the best available interpreter.
+                </p>
+              </div>
+              <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1 text-xs font-bold border ${
+                contractDetails?.status === "expired"
+                  ? "bg-rose-50 text-rose-600 border-rose-200"
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
+              }`}>
+                <ShieldCheck className="w-3.5 h-3.5" />
+                {contractDetails?.status === "expired" ? "SLA expired" : "Ready to call"}
+              </span>
+            </div>
 
             <form onSubmit={handleConnectRequest} className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className={`text-xs font-semibold ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    From Language
+                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
+                    From
                   </label>
                   <div className="relative">
                     <select
                       value={langFrom}
                       onChange={(e) => { setLangFrom(e.target.value); playBeepTone(400, 80); }}
-                      className={`w-full appearance-none border rounded-xl px-3 py-2.5 pr-9 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-base font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
                     >
                       {ethiopianLanguages.map(l => (
-                        <option key={l} value={l}>{l === "Amharic" ? "🇪🇹 Amharic" : l}</option>
+                        <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className={`text-xs font-semibold ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    To Language
+                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
+                    To
                   </label>
                   <div className="relative">
                     <select
                       value={langTo}
                       onChange={(e) => { setLangTo(e.target.value); playBeepTone(420, 80); }}
-                      className={`w-full appearance-none border rounded-xl px-3 py-2.5 pr-9 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-base font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
                     >
                       {ethiopianLanguages.filter(l => l !== langFrom).map(l => (
-                        <option key={l} value={l}>{l === "English" ? "EN English" : l}</option>
+                        <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className={`text-xs font-semibold ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    Specialty Classification
+                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
+                    Call type
                   </label>
                   <div className="relative">
                     <select
                       value={serviceType}
                       onChange={(e) => { setServiceType(e.target.value as typeof serviceType); playBeepTone(520, 100); }}
-                      className={`w-full appearance-none border rounded-xl px-3 py-2.5 pr-9 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
                     >
-                      <option value="medical">🏥 Medicine (Clinics)</option>
-                      <option value="legal">⚖️ Courts (Legal codes)</option>
-                      <option value="business">💼 Commerce (SME deals)</option>
-                      <option value="general">🌐 General (Standard)</option>
+                      <option value="medical">Medical</option>
+                      <option value="legal">Legal</option>
+                      <option value="business">Business</option>
+                      <option value="general">General</option>
                     </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className={`text-xs font-semibold ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    Connection Mode
+                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
+                    Interpreter
                   </label>
-                  <div className="relative">
-                    <select
-                      value={serviceMode}
-                      onChange={(e) => { setServiceMode(e.target.value as typeof serviceMode); playBeepTone(550, 80); }}
-                      className={`w-full appearance-none border rounded-xl px-3 py-2.5 pr-9 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
-                    >
-                      <option value="AI">🤖 Neural AI (1.5 ETB)</option>
-                      <option value="Human">📞 Specialist (35 ETB)</option>
-                      <option value="Both">⚡ Hybrid (40 ETB)</option>
-                    </select>
-                    <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["Human", "AI", "Both"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => { setServiceMode(mode); playBeepTone(550, 80); }}
+                        className={`rounded-2xl border px-3 py-3 text-xs font-black transition ${
+                          serviceMode === mode
+                            ? "bg-blue-600 border-blue-600 text-white"
+                            : theme === "light" ? "bg-white border-slate-200 text-slate-600 hover:border-blue-200" : "bg-zinc-950/60 border-white/10 text-slate-300 hover:border-blue-500/40"
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-600/80">Retainer Billing Hold</p>
-                  <p className="text-sm font-bold text-slate-800">
-                    {getEstimatedCost()} ETB <span className="font-normal text-slate-500">(SLA Coverage Verified)</span>
-                  </p>
-                </div>
-                <ShieldCheck className="w-6 h-6 text-blue-600 shrink-0" />
+              <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-slate-50 border-slate-200" : "bg-zinc-950/40 border-white/5"}`}>
+                <button
+                  type="button"
+                  onClick={() => setIsScheduled(!isScheduled)}
+                  className={`w-full flex items-center justify-between text-sm font-bold ${theme === "light" ? "text-slate-700" : "text-slate-300"}`}
+                >
+                  <span>{isScheduled ? "Scheduled call" : "Call now"}</span>
+                  <span className="text-xs font-semibold text-blue-500">
+                    {isScheduled ? "Switch to now" : "Schedule for later"}
+                  </span>
+                </button>
+                {isScheduled && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                    <input
+                      type="date"
+                      value={scheduledDate}
+                      onChange={(e) => setScheduledDate(e.target.value)}
+                      className={`rounded-xl border px-3 py-2 text-sm ${inputSurface}`}
+                    />
+                    <input
+                      type="time"
+                      value={scheduledTimeStr}
+                      onChange={(e) => setScheduledTimeStr(e.target.value)}
+                      className={`rounded-xl border px-3 py-2 text-sm ${inputSurface}`}
+                    />
+                    <select
+                      value={scheduledDuration}
+                      onChange={(e) => setScheduledDuration(Number(e.target.value))}
+                      className={`rounded-xl border px-3 py-2 text-sm ${inputSurface}`}
+                    >
+                      <option value={15}>15 min</option>
+                      <option value={30}>30 min</option>
+                      <option value={45}>45 min</option>
+                      <option value={60}>60 min</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                theme === "light" ? "bg-blue-50/70 border-blue-100" : "bg-blue-500/10 border-blue-500/20"
+              }`}>
+                <p className={`text-xs ${theme === "light" ? "text-slate-600" : "text-slate-300"}`}>
+                  Estimated hold: <span className="font-black">{getEstimatedCost()} ETB</span>
+                  <span className="text-slate-400"> · SLA verified</span>
+                </p>
+                <p className="text-xs font-bold text-blue-500">
+                  {langFrom} to {langTo}
+                </p>
               </div>
 
               {wizardError && (
@@ -1141,99 +1295,94 @@ export default function ClientDashboard({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full rounded-xl bg-[#2563EB] hover:bg-blue-600 text-white py-4 px-4 transition active:scale-[0.99] disabled:opacity-70 shadow-lg shadow-blue-500/20 cursor-pointer"
+                className="w-full rounded-2xl bg-[#2563EB] hover:bg-blue-600 text-white py-5 px-4 transition active:scale-[0.99] disabled:opacity-70 shadow-lg shadow-blue-500/25 cursor-pointer"
               >
                 {isSubmitting ? (
-                  <span className="inline-flex items-center gap-2 text-sm font-bold">
-                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span className="inline-flex items-center gap-2 text-base font-black">
+                    <RefreshCw className="w-5 h-5 animate-spin" />
                     Connecting...
                   </span>
                 ) : (
-                  <>
-                    <span className="block text-base font-bold">⚡ Start Translation Call</span>
-                    <span className="block text-xs font-normal opacity-90 mt-0.5">Immediate Connect</span>
-                  </>
+                  <span className="inline-flex items-center justify-center gap-2 text-lg font-black">
+                    <PhoneCall className="w-5 h-5" />
+                    {isScheduled ? "Schedule Call" : "Start Call Now"}
+                  </span>
                 )}
               </button>
             </form>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Match Candidate */}
-            <div className={`rounded-2xl border p-5 ${cardSurface}`}>
-              <h4 className={`text-sm font-bold mb-4 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-                Match Candidate
-              </h4>
-              <div className="space-y-3">
+          <div className={`rounded-2xl border p-5 ${cardSurface}`}>
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <div>
+                <h4 className={`text-sm font-black ${theme === "light" ? "text-slate-900" : "text-white"}`}>
+                  Quick Call Interpreters
+                </h4>
+                <p className="text-xs text-slate-500">Matching your selected language pair.</p>
+              </div>
+              <div className="hidden sm:flex items-center gap-2">
+                <input
+                  type="text"
+                  value={dialCode}
+                  onChange={(e) => setDialCode(e.target.value)}
+                  placeholder="Ext code"
+                  className={`w-28 border rounded-xl px-3 py-2 text-xs focus:outline-none ${inputSurface}`}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleKeypadCodeSubmit(); } }}
+                />
+                <button
+                  type="button"
+                  onClick={handleKeypadCodeSubmit}
+                  className="rounded-xl bg-slate-900 text-white px-3 py-2 text-xs font-bold"
+                >
+                  Dial
+                </button>
+              </div>
+            </div>
+
+            {matchCandidates.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {matchCandidates.map((interpreter) => {
                   const ext = INTERPRETER_EXT[interpreter.id] || "----";
-                  const firstName = interpreter.name.split(" ")[0];
                   return (
                     <div
                       key={interpreter.id}
-                      className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${
-                        theme === "light" ? "border-slate-100 bg-slate-50/50" : "border-white/5 bg-white/[0.02]"
+                      className={`rounded-2xl border p-4 flex items-center gap-3 ${
+                        theme === "light" ? "border-slate-100 bg-slate-50/70" : "border-white/5 bg-white/[0.02]"
                       }`}
                     >
                       <img
                         src={interpreter.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${interpreter.name}`}
                         alt={interpreter.name}
-                        className="w-10 h-10 rounded-full object-cover border border-white shadow-sm"
+                        className="w-12 h-12 rounded-full object-cover border border-white shadow-sm"
                         referrerPolicy="no-referrer"
                       />
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm font-bold truncate ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-                          {firstName} ({ext})
+                        <p className={`text-sm font-black truncate ${theme === "light" ? "text-slate-900" : "text-white"}`}>
+                          {interpreter.name}
                         </p>
-                        <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          Available
+                        <p className="text-[11px] text-slate-500">
+                          Ext {ext} · Rating {interpreter.rating?.toFixed(1) || "5.0"}
+                        </p>
+                        <p className="text-[11px] text-blue-500 font-semibold">
+                          {langFrom} to {langTo}
                         </p>
                       </div>
                       <button
                         type="button"
                         onClick={() => handleDirectDialExt(interpreter.id)}
-                        className="w-10 h-10 rounded-full bg-emerald-500 hover:bg-emerald-600 text-white flex items-center justify-center shadow-md shadow-emerald-500/25 transition active:scale-95 cursor-pointer"
-                        title={`Call ${interpreter.name}`}
+                        className="rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 text-xs font-black transition active:scale-95"
                       >
-                        <PhoneCall className="w-4 h-4" />
+                        Call
                       </button>
                     </div>
                   );
                 })}
               </div>
-            </div>
-
-            {/* Direct Ext Speed-Dial */}
-            <div className={`rounded-2xl border p-5 ${cardSurface}`}>
-              <h4 className={`text-sm font-bold mb-4 ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-                Direct Ext Speed-Dial
-              </h4>
-              <div className="space-y-3">
-                <label className={`text-xs font-semibold ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                  Ext Code
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={dialCode}
-                    onChange={(e) => setDialCode(e.target.value)}
-                    placeholder="Enter Extension Code"
-                    className={`w-full border rounded-xl px-3 py-2.5 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${inputSurface}`}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleKeypadCodeSubmit(); } }}
-                  />
-                  <LayoutGrid className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                </div>
-                <button
-                  type="button"
-                  onClick={handleKeypadCodeSubmit}
-                  className="w-full rounded-xl bg-[#2563EB] hover:bg-blue-600 text-white py-3 text-sm font-bold flex items-center justify-center gap-2 transition active:scale-[0.99] cursor-pointer"
-                >
-                  <PhoneCall className="w-4 h-4" />
-                  Dial
-                </button>
+            ) : (
+              <div className={`rounded-2xl border p-4 text-sm ${theme === "light" ? "border-slate-100 bg-slate-50 text-slate-500" : "border-white/5 bg-zinc-950/30 text-slate-400"}`}>
+                No direct-call interpreter matches this exact pair yet. Use Start Call Now to broadcast the request.
               </div>
-            </div>
+            )}
           </div>
 
         </div>
@@ -1424,13 +1573,24 @@ export default function ClientDashboard({
                           <span className="text-[8px] text-slate-500 block">Date: {sess.scheduledTime && sess.scheduledTime !== "instant" ? new Date(sess.scheduledTime).toLocaleDateString() : "Instant Call"}</span>
                         </div>
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-[8px] uppercase font-mono font-black border ${
-                        sess.status === "completed" ? "bg-[#15803D]/10 text-[#15803D] border-[#15803D]/20" :
-                        sess.status === "active" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 animate-pulse" :
-                        "bg-zinc-800 text-slate-400 border-zinc-700"
-                      }`}>
-                        {sess.status}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        {sess.status === "completed" && (
+                          <button
+                            type="button"
+                            onClick={() => openRatingPopup(sess)}
+                            className="px-2 py-0.5 rounded text-[8px] uppercase font-mono font-black border border-amber-500/20 text-amber-400 bg-amber-500/10 hover:bg-amber-500/15"
+                          >
+                            {sess.ratingByClient ? "Change Rating" : "Rate"}
+                          </button>
+                        )}
+                        <span className={`px-2 py-0.5 rounded text-[8px] uppercase font-mono font-black border ${
+                          sess.status === "completed" ? "bg-[#15803D]/10 text-[#15803D] border-[#15803D]/20" :
+                          sess.status === "active" ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20 animate-pulse" :
+                          "bg-zinc-800 text-slate-400 border-zinc-700"
+                        }`}>
+                          {sess.status}
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1579,6 +1739,105 @@ export default function ClientDashboard({
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {ratingSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 bg-black/70 backdrop-blur-sm">
+          <form
+            onSubmit={handleRatingSubmit}
+            className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl space-y-5 ${
+              theme === "light"
+                ? "bg-white border-slate-200 text-slate-900"
+                : "bg-[#16161A] border-white/10 text-white"
+            }`}
+          >
+            <div className="text-center space-y-2">
+              <div className="mx-auto w-14 h-14 rounded-full bg-amber-500/10 flex items-center justify-center border border-amber-500/20">
+                <Star className="w-7 h-7 fill-amber-400 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-widest">
+                  Rate Your Interpreter
+                </h3>
+                <p className={`text-xs mt-1 ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
+                  You can update this feedback after each call. Previous ratings are pre-filled when available.
+                </p>
+              </div>
+            </div>
+
+            <div className={`rounded-2xl border p-3 text-xs ${
+              theme === "light" ? "bg-slate-50 border-slate-200" : "bg-zinc-950/50 border-white/5"
+            }`}>
+              <span className="text-[9px] uppercase tracking-widest font-black text-slate-500 block">
+                Completed Session
+              </span>
+              <div className="mt-1 flex items-center justify-between gap-3">
+                <span className="font-bold truncate">
+                  {ratingSession.interpreterName || "Interpreter"}
+                </span>
+                <span className="font-mono text-[10px] text-blue-400 whitespace-nowrap">
+                  {ratingSession.languageFrom} ⇆ {ratingSession.languageTo}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex justify-center gap-1">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => {
+                    setRating(star);
+                    playBeepTone(500 + star * 100, 80);
+                  }}
+                  className="p-1.5 rounded-xl hover:bg-amber-500/10 transition"
+                  aria-label={`Rate ${star} star${star === 1 ? "" : "s"}`}
+                >
+                  <Star className={`w-8 h-8 ${star <= rating ? "fill-amber-400 text-amber-400" : "text-slate-500"}`} />
+                </button>
+              ))}
+            </div>
+
+            <textarea
+              value={reviewText}
+              onChange={(e) => setReviewText(e.target.value)}
+              placeholder="Optional note about fluency, clarity, or professionalism..."
+              rows={4}
+              className={`w-full rounded-2xl border p-3 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500 ${
+                theme === "light"
+                  ? "bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400"
+                  : "bg-zinc-950/60 border-white/10 text-white placeholder-slate-500"
+              }`}
+            />
+
+            {feedbackSuccess && (
+              <div className="text-xs text-emerald-500 bg-emerald-500/10 py-2 rounded-xl font-bold text-center">
+                Review saved. Thank you for helping maintain interpreter quality.
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={closeRatingPopup}
+                className={`py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider border ${
+                  theme === "light"
+                    ? "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    : "border-white/10 text-slate-300 hover:bg-white/5"
+                }`}
+              >
+                Skip For Now
+              </button>
+              <button
+                type="submit"
+                disabled={isSubmittingRating}
+                className="py-2.5 bg-gradient-to-r from-amber-500 to-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold uppercase tracking-wider"
+              >
+                {isSubmittingRating ? "Saving..." : "Save Rating"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

@@ -36,6 +36,7 @@ interface User {
   role: "admin" | "client" | "interpreter";
   status: "active" | "suspended" | "pending";
   languages?: string[];
+  languageProficiencies?: { language: string; level: string }[];
   rating?: number;
   completedSessions?: number;
   hourlyRate?: number;
@@ -114,6 +115,15 @@ interface ContractDetails {
   status: "active" | "expired";
 }
 
+function normalizeInterpreterLanguages(
+  languages: Array<string | { language: string; level?: string }> | undefined
+): string[] {
+  if (!languages?.length) return [];
+  return languages
+    .map((item) => (typeof item === "string" ? item : item.language))
+    .filter(Boolean);
+}
+
 // Initial Data Population
 let users: User[] = [
   { id: "usr_admin1", name: "Almaz Kebede", email: "admin@elliot.live", role: "admin", status: "active", avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150", provisionedPassword: "demo1234" },
@@ -129,10 +139,114 @@ let users: User[] = [
     isInstitutionPrimary: true,
     provisionedPassword: "demo1234",
   },
-  { id: "usr_int1", name: "Bekele Megersa", email: "bekele@oromo-interpret.com", role: "interpreter", status: "active", languages: ["Afaan Oromo", "Afar", "Amharic", "English"], rating: 4.9, completedSessions: 142, hourlyRate: 45, avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150", provisionedPassword: "demo1234" },
-  { id: "usr_int2", name: "Haleema Bashir", email: "haleema@somali-interpret.com", role: "interpreter", status: "active", languages: ["Somali", "English", "Amharic"], rating: 4.8, completedSessions: 94, hourlyRate: 40, avatar: "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=150", provisionedPassword: "demo1234" },
-  { id: "usr_int3", name: "Yared Girmay", email: "yared@tigrinya-interpret.com", role: "interpreter", status: "active", languages: ["Tigrinya", "Amharic", "English"], rating: 4.7, completedSessions: 81, hourlyRate: 35, avatar: "https://images.unsplash.com/photo-1542909168-82c3e7fdca5c?w=150", provisionedPassword: "demo1234" },
-  { id: "usr_int4", name: "Selamawit Tadesse", email: "selam@amharic-interpret.com", role: "interpreter", status: "active", languages: ["Amharic", "English"], rating: 4.95, completedSessions: 310, hourlyRate: 50, avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150", provisionedPassword: "demo1234" }
+  {
+    id: "usr_int1",
+    name: "Bekele Megersa",
+    email: "bekele@oromo-interpret.com",
+    role: "interpreter",
+    status: "active",
+    languages: ["Afaan Oromo", "Afar", "Amharic", "English"],
+    languageProficiencies: [
+      { language: "Afaan Oromo", level: "Native" },
+      { language: "Afar", level: "Conversational" },
+      { language: "Amharic", level: "Fluent" },
+      { language: "English", level: "Professional" },
+    ],
+    rating: 4.9,
+    completedSessions: 142,
+    hourlyRate: 45,
+    avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150",
+    provisionedPassword: "demo1234",
+  },
+  {
+    id: "usr_int2",
+    name: "Haleema Bashir",
+    email: "haleema@somali-interpret.com",
+    role: "interpreter",
+    status: "active",
+    languages: ["Somali", "Amharic", "English"],
+    languageProficiencies: [
+      { language: "Somali", level: "Native" },
+      { language: "Amharic", level: "Fluent" },
+      { language: "English", level: "Conversational" },
+    ],
+    rating: 4.8,
+    completedSessions: 94,
+    hourlyRate: 40,
+    avatar: "https://images.unsplash.com/photo-1607746882042-944635dfe10e?w=150",
+    provisionedPassword: "demo1234",
+  },
+  {
+    id: "usr_int3",
+    name: "Yared Girmay",
+    email: "yared@tigrinya-interpret.com",
+    role: "interpreter",
+    status: "active",
+    languages: ["Tigrinya", "Amharic", "English"],
+    languageProficiencies: [
+      { language: "Tigrinya", level: "Native" },
+      { language: "Amharic", level: "Native" },
+      { language: "English", level: "Fluent" },
+    ],
+    rating: 4.7,
+    completedSessions: 81,
+    hourlyRate: 35,
+    avatar: "https://images.unsplash.com/photo-1542909168-82c3e7fdca5c?w=150",
+    provisionedPassword: "demo1234",
+  },
+  {
+    id: "usr_int4",
+    name: "Selamawit Tadesse",
+    email: "selam@amharic-interpret.com",
+    role: "interpreter",
+    status: "active",
+    languages: ["Amharic", "English"],
+    languageProficiencies: [
+      { language: "Amharic", level: "Native" },
+      { language: "English", level: "Native" },
+    ],
+    rating: 4.95,
+    completedSessions: 310,
+    hourlyRate: 50,
+    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+    provisionedPassword: "demo1234",
+  },
+  {
+    id: "usr_int5",
+    name: "Fatuma Ali",
+    email: "fatuma@somali-medical.et",
+    role: "interpreter",
+    status: "active",
+    languages: ["Somali", "Amharic", "English"],
+    languageProficiencies: [
+      { language: "Somali", level: "Native" },
+      { language: "Amharic", level: "Conversational" },
+      { language: "English", level: "Basic" },
+    ],
+    rating: 4.6,
+    completedSessions: 58,
+    hourlyRate: 32,
+    avatar: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150",
+    provisionedPassword: "demo1234",
+  },
+  {
+    id: "usr_int6",
+    name: "Lemma Hailu",
+    email: "lemma@afar-interpret.et",
+    role: "interpreter",
+    status: "active",
+    languages: ["Afar", "Amharic", "Afaan Oromo"],
+    languageProficiencies: [
+      { language: "Afar", level: "Native" },
+      { language: "Amharic", level: "Conversational" },
+      { language: "Afaan Oromo", level: "Basic" },
+    ],
+    rating: 4.5,
+    completedSessions: 47,
+    hourlyRate: 38,
+    avatar: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150",
+    provisionedPassword: "demo1234",
+  },
 ];
 
 let sessions: Session[] = [
@@ -563,7 +677,7 @@ app.post("/api/gemini/smart-match", async (req, res) => {
 
   if (!ai) {
     // Select the best live interpreter from local data
-    const matched = users.filter(u => u.role === "interpreter" && u.languages?.includes(clientLang));
+    const matched = users.filter((u) => u.role === "interpreter" && normalizeInterpreterLanguages(u.languages).includes(clientLang));
     const selected = matched[0] || users[2];
     return res.json({
       recommendedInterpreterId: selected.id,
@@ -1074,7 +1188,7 @@ app.post("/api/sessions/request", (req, res) => {
   const parsedCost = Number(cost) || 0;
 
   // Find a matching interpreter profile automatically using our list
-  const matchedInt = users.find(u => u.role === "interpreter" && u.languages?.includes(languageFrom));
+  const matchedInt = users.find((u) => u.role === "interpreter" && normalizeInterpreterLanguages(u.languages).includes(languageFrom));
   
   const isAIOnly = serviceMode === "AI";
   const newSession: Session = {
@@ -1247,15 +1361,18 @@ app.post("/api/sessions/:id/complete", (req, res) => {
   const session = sessions.find(s => s.id === id);
   if (!session) return res.status(404).json({ error: "Session not found" });
 
+  const wasCompleted = session.status === "completed";
   session.status = "completed";
-  session.durationSeconds = Math.floor(400 + Math.random() * 800); // Simulated elapsed time
-  if (rating) session.ratingByClient = rating;
-  if (review) session.reviewByClient = review;
+  if (!wasCompleted) {
+    session.durationSeconds = Math.floor(400 + Math.random() * 800); // Simulated elapsed time
+  }
+  if (rating !== undefined) session.ratingByClient = rating;
+  if ("review" in req.body) session.reviewByClient = review;
   if (transcript) session.transcript = transcript;
   if (summary) session.summary = summary;
 
   // Add earnings to interpreter completed count and payout logic
-  if (session.interpreterId) {
+  if (!wasCompleted && session.interpreterId) {
     const interpreter = users.find(u => u.id === session.interpreterId);
     if (interpreter) {
       interpreter.completedSessions = (interpreter.completedSessions || 0) + 1;

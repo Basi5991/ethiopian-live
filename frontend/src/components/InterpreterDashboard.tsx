@@ -10,6 +10,7 @@ import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
 import {
   findIncomingSessionForInterpreter,
+  formatLanguageProficiencies,
   isDirectDialSession,
 } from "../lib/interpreterMatching";
 
@@ -570,7 +571,11 @@ export default function InterpreterDashboard({
               <span className="text-[10px] font-bold uppercase text-amber-500">Broadcast call available</span>
               <p className="text-sm font-bold">{incomingRequest.languageFrom} ⇆ {incomingRequest.languageTo}</p>
               <p className="text-[10px] text-amber-300/80">
-                Matched to your languages: {interpreterLanguages.join(", ")}
+                Matched to your languages:{" "}
+                {formatLanguageProficiencies(
+                  interpreterLanguages,
+                  currentUser?.languageProficiencies ?? currentInterpreter?.languageProficiencies
+                )}
               </p>
             </div>
             <div className="flex items-center gap-3">

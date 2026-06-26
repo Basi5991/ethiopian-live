@@ -44,7 +44,12 @@ DEMO_USERS = [
         "first_name": "Bekele",
         "last_name": "Megersa",
         "role": "interpreter",
-        "languages": ["Afaan Oromo", "Afar", "Amharic", "English"],
+        "languages": [
+            {"language": "Afaan Oromo", "level": "Native"},
+            {"language": "Afar", "level": "Conversational"},
+            {"language": "Amharic", "level": "Fluent"},
+            {"language": "English", "level": "Professional"},
+        ],
         "rating": 4.9,
         "completed_sessions": 142,
         "hourly_rate": 45,
@@ -57,7 +62,11 @@ DEMO_USERS = [
         "first_name": "Haleema",
         "last_name": "Bashir",
         "role": "interpreter",
-        "languages": ["Somali", "English", "Amharic"],
+        "languages": [
+            {"language": "Somali", "level": "Native"},
+            {"language": "Amharic", "level": "Fluent"},
+            {"language": "English", "level": "Conversational"},
+        ],
         "rating": 4.8,
         "completed_sessions": 94,
         "hourly_rate": 40,
@@ -70,7 +79,11 @@ DEMO_USERS = [
         "first_name": "Yared",
         "last_name": "Girmay",
         "role": "interpreter",
-        "languages": ["Tigrinya", "Amharic", "English"],
+        "languages": [
+            {"language": "Tigrinya", "level": "Native"},
+            {"language": "Amharic", "level": "Native"},
+            {"language": "English", "level": "Fluent"},
+        ],
         "rating": 4.7,
         "completed_sessions": 81,
         "hourly_rate": 35,
@@ -83,11 +96,48 @@ DEMO_USERS = [
         "first_name": "Selamawit",
         "last_name": "Tadesse",
         "role": "interpreter",
-        "languages": ["Amharic", "English"],
+        "languages": [
+            {"language": "Amharic", "level": "Native"},
+            {"language": "English", "level": "Native"},
+        ],
         "rating": 4.95,
         "completed_sessions": 310,
         "hourly_rate": 50,
         "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+    },
+    {
+        "external_id": "usr_int5",
+        "username": "usr_int5",
+        "email": "fatuma@somali-medical.et",
+        "first_name": "Fatuma",
+        "last_name": "Ali",
+        "role": "interpreter",
+        "languages": [
+            {"language": "Somali", "level": "Native"},
+            {"language": "Amharic", "level": "Conversational"},
+            {"language": "English", "level": "Basic"},
+        ],
+        "rating": 4.6,
+        "completed_sessions": 58,
+        "hourly_rate": 32,
+        "avatar": "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150",
+    },
+    {
+        "external_id": "usr_int6",
+        "username": "usr_int6",
+        "email": "lemma@afar-interpret.et",
+        "first_name": "Lemma",
+        "last_name": "Hailu",
+        "role": "interpreter",
+        "languages": [
+            {"language": "Afar", "level": "Native"},
+            {"language": "Amharic", "level": "Conversational"},
+            {"language": "Afaan Oromo", "level": "Basic"},
+        ],
+        "rating": 4.5,
+        "completed_sessions": 47,
+        "hourly_rate": 38,
+        "avatar": "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150",
     },
 ]
 
@@ -144,6 +194,14 @@ class Command(BaseCommand):
                     "provisioned_password": "demo1234",
                 },
             )
+            if item["role"] == "interpreter":
+                profile.languages = item.get("languages", [])
+                profile.rating = item.get("rating", profile.rating)
+                profile.completed_sessions = item.get("completed_sessions", profile.completed_sessions)
+                profile.hourly_rate = item.get("hourly_rate", profile.hourly_rate)
+                profile.avatar = item.get("avatar", profile.avatar)
+                profile.provisioned_password = profile.provisioned_password or "demo1234"
+                profile.save()
             profiles[item["external_id"]] = profile
 
         now = timezone.now()
@@ -299,6 +357,13 @@ class Command(BaseCommand):
             ("usr_int1", "Monday", [{"start": "08:00", "end": "12:00", "recurring": True}, {"start": "14:00", "end": "18:00", "recurring": True}]),
             ("usr_int1", "Wednesday", [{"start": "09:00", "end": "17:00", "recurring": True}]),
             ("usr_int2", "Tuesday", [{"start": "10:00", "end": "16:00", "recurring": False}]),
+            ("usr_int2", "Thursday", [{"start": "09:00", "end": "15:00", "recurring": True}]),
+            ("usr_int3", "Thursday", [{"start": "08:30", "end": "12:30", "recurring": True}]),
+            ("usr_int3", "Friday", [{"start": "13:00", "end": "17:00", "recurring": True}]),
+            ("usr_int4", "Monday", [{"start": "07:00", "end": "11:00", "recurring": True}]),
+            ("usr_int4", "Wednesday", [{"start": "07:00", "end": "11:00", "recurring": True}]),
+            ("usr_int5", "Saturday", [{"start": "08:00", "end": "14:00", "recurring": True}]),
+            ("usr_int6", "Wednesday", [{"start": "06:00", "end": "12:00", "recurring": True}]),
         ]
         for external_id, day, slots in availabilities:
             InterpreterAvailability.objects.update_or_create(
