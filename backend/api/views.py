@@ -24,7 +24,7 @@ from .models import (
     WebRTCSignal,
 )
 from .services import gemini
-from .services.interpreter_matching import can_interpreter_accept_session
+from .services.interpreter_matching import can_interpreter_accept_session, interpreter_supports_language_pair
 from .utils import (
     check_and_get_contract,
     get_contract_for_client,
@@ -33,7 +33,6 @@ from .utils import (
     get_wallet_balance,
     is_institutional_client,
     log_action,
-    normalize_interpreter_languages,
     new_id,
     new_log_id,
     new_tx_id,
@@ -176,7 +175,7 @@ class SessionRequestView(APIView):
             (
                 p
                 for p in Profile.objects.filter(role="interpreter", status="active").select_related("user")
-                if language_from in normalize_interpreter_languages(p.languages)
+                if interpreter_supports_language_pair(p.languages, language_from, language_to)
             ),
             None,
         )
@@ -269,6 +268,16 @@ class CallDialView(APIView):
             return Response({"error": "No client profile configured."}, status=status.HTTP_400_BAD_REQUEST)
 
         target = get_profile_by_external_id(interpreter_id) if interpreter_id else None
+        if target and not interpreter_supports_language_pair(target.languages, language_from, language_to):
+            return Response(
+                {
+                    "error": (
+                        f"Interpreter {target.user.get_full_name()} is not registered for "
+                        f"{language_from} ⇆ {language_to}."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         session = Session.objects.create(
             id=new_id("sess_call"),

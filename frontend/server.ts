@@ -124,6 +124,16 @@ function normalizeInterpreterLanguages(
     .filter(Boolean);
 }
 
+function interpreterSupportsLanguagePair(
+  user: User | undefined,
+  languageFrom: string,
+  languageTo: string
+): boolean {
+  if (!user || user.role !== "interpreter") return false;
+  const languages = normalizeInterpreterLanguages(user.languages);
+  return languages.includes(languageFrom) && languages.includes(languageTo);
+}
+
 // Initial Data Population
 let users: User[] = [
   { id: "usr_admin1", name: "Almaz Kebede", email: "admin@elliot.live", role: "admin", status: "active", avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150", provisionedPassword: "demo1234" },
@@ -1089,6 +1099,11 @@ app.post("/api/calls/dial", (req, res) => {
 
   const parsedCost = Number(cost) || 350;
   const targetInt = users.find(u => u.id === interpreterId);
+  if (targetInt && !interpreterSupportsLanguagePair(targetInt, languageFrom || "Amharic", languageTo || "English")) {
+    return res.status(400).json({
+      error: `Interpreter ${targetInt.name} is not registered for ${languageFrom} ⇆ ${languageTo}.`,
+    });
+  }
 
   const newSession: Session = {
     id: `sess_call_${Math.floor(1000 + Math.random() * 9000)}`,
@@ -1187,21 +1202,22 @@ app.post("/api/sessions/request", (req, res) => {
   // Under active corporate SLA contract, billing processed post-service
   const parsedCost = Number(cost) || 0;
 
-  // Find a matching interpreter profile automatically using our list
-  const matchedInt = users.find((u) => u.role === "interpreter" && normalizeInterpreterLanguages(u.languages).includes(languageFrom));
+  // Find a matching interpreter for scheduled requests; instant calls broadcast until accepted.
+  const matchedInt = users.find((u) => interpreterSupportsLanguagePair(u, languageFrom, languageTo));
   
   const isAIOnly = serviceMode === "AI";
+  const isInstant = scheduledTime === "instant";
   const newSession: Session = {
     id: `sess_${Math.floor(1000 + Math.random() * 9000)}`,
     clientId: client!.id,
     clientName: client!.name,
-    interpreterId: isAIOnly ? "usr_orzo_ai" : matchedInt?.id,
-    interpreterName: isAIOnly ? "ORZO AI Neural Interpreter" : matchedInt?.name,
+    interpreterId: isAIOnly ? "usr_orzo_ai" : isInstant ? undefined : matchedInt?.id,
+    interpreterName: isAIOnly ? "ORZO AI Neural Interpreter" : isInstant ? "" : matchedInt?.name,
     languageFrom,
     languageTo,
     serviceType,
     serviceMode,
-    status: isAIOnly ? (scheduledTime === "instant" ? "active" : "pending") : (scheduledTime === "instant" ? "incoming" : "pending"),
+    status: isAIOnly ? (isInstant ? "active" : "pending") : (isInstant ? "incoming" : "pending"),
     scheduledTime,
     cost,
     durationSeconds: 0,
@@ -1242,6 +1258,11 @@ app.post("/api/sessions/:id/accept", (req, res) => {
 
   const interpreter = users.find(u => u.id === interpreterId);
   if (!interpreter) return res.status(404).json({ error: "Interpreter not found" });
+  if (!interpreterSupportsLanguagePair(interpreter, session.languageFrom, session.languageTo)) {
+    return res.status(403).json({
+      error: `You are not registered for the ${session.languageFrom} ⇆ ${session.languageTo} language pair.`,
+    });
+  }
 
   session.status = "active";
   session.interpreterId = interpreter.id;
@@ -1255,7 +1276,7 @@ app.post("/api/sessions/:id/accept", (req, res) => {
   });
 
   logAction(`Session ${id} accepted by interpreter ${interpreter.name}`, "interpreter", interpreter.name, "success");
-  res.json(session);
+  res.json({ success: true, session });
 });
 
 // Update chat in session (supports real-time client side polling/fetching)
