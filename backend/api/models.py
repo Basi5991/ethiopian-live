@@ -4,6 +4,10 @@ from django.contrib.auth.models import User
 from django.db import models
 
 
+def new_webrtc_signal_id() -> str:
+    return f"sig_{uuid.uuid4().hex[:12]}"
+
+
 class Profile(models.Model):
     ROLE_CHOICES = [
         ("admin", "Admin"),
@@ -202,7 +206,7 @@ class WebRTCSignal(models.Model):
         ("interpreter", "Interpreter"),
     ]
 
-    id = models.CharField(max_length=64, primary_key=True, default="")
+    id = models.CharField(max_length=64, primary_key=True, default=new_webrtc_signal_id)
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name="webrtc_signals")
     sender_role = models.CharField(max_length=20, choices=SENDER_ROLE_CHOICES)
     signal_type = models.CharField(max_length=20, choices=SIGNAL_TYPE_CHOICES)

@@ -363,8 +363,6 @@ class SessionAcceptView(APIView):
         session.status = "active"
         session.save()
 
-        WebRTCSignal.objects.filter(session=session).delete()
-
         ChatMessage.objects.create(
             session=session,
             sender_role="system",

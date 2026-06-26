@@ -78,6 +78,15 @@ interface ChatMessage {
   timestamp: string;
 }
 
+interface WebRTCSignal {
+  id: string;
+  sessionId: string;
+  senderRole: "client" | "interpreter";
+  signalType: "offer" | "answer" | "ice" | "hangup";
+  payload: unknown;
+  createdAt: string;
+}
+
 interface Transaction {
   id: string;
   userId: string;
@@ -133,6 +142,8 @@ function interpreterSupportsLanguagePair(
   const languages = normalizeInterpreterLanguages(user.languages);
   return languages.includes(languageFrom) && languages.includes(languageTo);
 }
+
+let webrtcSignals: WebRTCSignal[] = [];
 
 // Initial Data Population
 let users: User[] = [
@@ -1570,8 +1581,97 @@ Return ONLY a raw JSON with the following schema, with no markdown tags:
     res.status(550).json({ replyText: "Apologies, processing speech vectors failed. Please try again.", action: "chat", data: {} });
   }
 });
+app.post("/api/webrtc/:sessionId/signal", (req, res) => {
+  const { sessionId } = req.params;
+  const { senderRole, signalType, payload } = req.body;
 
+  const session = sessions.find((s) => s.id === sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (senderRole !== "client" && senderRole !== "interpreter") {
+    return res.status(400).json({ error: "Invalid senderRole." });
+  }
+  if (!["offer", "answer", "ice", "hangup"].includes(signalType)) {
+    return res.status(400).json({ error: "Invalid signalType." });
+  }
+  if (payload === undefined || payload === null) {
+    return res.status(400).json({ error: "Missing payload." });
+  }
 
+  if (signalType === "offer") {
+    webrtcSignals = webrtcSignals.filter(
+      (signal) => !(signal.sessionId === sessionId && signal.signalType === "offer")
+    );
+  } else if (signalType === "answer") {
+    webrtcSignals = webrtcSignals.filter(
+      (signal) =>
+        !(
+          signal.sessionId === sessionId &&
+          signal.signalType === "answer" &&
+          signal.senderRole === senderRole
+        )
+    );
+  }
+
+  const signal: WebRTCSignal = {
+    id: `sig_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    sessionId,
+    senderRole,
+    signalType,
+    payload,
+    createdAt: new Date().toISOString(),
+  };
+  webrtcSignals.push(signal);
+
+  res.json({
+    success: true,
+    signal: {
+      id: signal.id,
+      senderRole: signal.senderRole,
+      signalType: signal.signalType,
+      payload: signal.payload,
+      createdAt: signal.createdAt,
+    },
+  });
+});
+
+app.get("/api/webrtc/:sessionId/signals", (req, res) => {
+  const { sessionId } = req.params;
+  const peer = String(req.query.peer || "");
+  const since = String(req.query.since || "");
+
+  const session = sessions.find((s) => s.id === sessionId);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  if (peer !== "client" && peer !== "interpreter") {
+    return res.status(400).json({ error: "Query param 'peer' must be client or interpreter." });
+  }
+
+  let signals = webrtcSignals.filter((signal) => signal.sessionId === sessionId && signal.senderRole === peer);
+  if (since) {
+    const sinceTime = Date.parse(since);
+    if (!Number.isNaN(sinceTime)) {
+      signals = signals.filter((signal) => Date.parse(signal.createdAt) > sinceTime);
+    }
+  }
+
+  res.json({
+    signals: signals
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+      .slice(0, 100)
+      .map((signal) => ({
+        id: signal.id,
+        senderRole: signal.senderRole,
+        signalType: signal.signalType,
+        payload: signal.payload,
+        createdAt: signal.createdAt,
+      })),
+  });
+});
+
+app.delete("/api/webrtc/:sessionId/signals/clear", (req, res) => {
+  const { sessionId } = req.params;
+  webrtcSignals = webrtcSignals.filter((signal) => signal.sessionId !== sessionId);
+  res.json({ success: true });
+});
 
 // Return JSON (not HTML) for unknown API routes — avoids silent fetch/json failures in the UI
 app.use("/api", (req, res) => {
