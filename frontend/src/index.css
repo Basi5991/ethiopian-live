@@ -1,0 +1,292 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+/* Hide scrollbars globally */
+*::-webkit-scrollbar {
+  display: none !important;
+}
+* {
+  -ms-overflow-style: none !important;  /* IE and Edge */
+  scrollbar-width: none !important;  /* Firefox */
+}
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-client-primary: #0A66C2;
+  --color-client-secondary: #E8F0FE;
+  --color-interpreter-primary: #1B7B4C;
+  --color-interpreter-secondary: #E6F4EA;
+  --color-orzo-primary: #6A2C9E;
+  --color-orzo-secondary: #F3E8FF;
+  --color-admin-primary: #D32F2F;
+  --color-admin-neutral: #1E293B;
+}
+
+@layer utilities {
+  @keyframes scale-up {
+    0% { transform: scale(0.97); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .animate-scale-up {
+    animation: scale-up 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+/* ==========================================================================
+   CLASSIC PREMIUM BLACK & WHITE (LIGHT THEME) OVERRIDES
+   ========================================================================== */
+
+.theme-light {
+  background-color: #F1F3F7 !important;
+  color: #1E293B !important;
+}
+
+/* Base typography elements */
+.theme-light h1,
+.theme-light h2,
+.theme-light h3,
+.theme-light h4,
+.theme-light h5,
+.theme-light h6,
+.theme-light .text-white,
+.theme-light .text-zinc-100,
+.theme-light .text-slate-100 {
+  color: #0F172A !important;
+}
+
+.theme-light p,
+.theme-light .text-slate-300,
+.theme-light .text-slate-400,
+.theme-light .text-zinc-400,
+.theme-light .text-slate-350 {
+  color: #334155 !important;
+}
+
+.theme-light .text-zinc-550,
+.theme-light .text-zinc-500,
+.theme-light .text-slate-500 {
+  color: #64748B !important;
+}
+
+/* Container & beautiful card overrides */
+.theme-light .bg-\[\#16161A\],
+.theme-light .bg-\[\#16161a\],
+.theme-light .bg-\[\#0F0F13\],
+.theme-light .bg-\[\#0F0F12\],
+.theme-light .bg-black\/30,
+.theme-light .bg-black\/40,
+.theme-light .bg-black\/10,
+.theme-light .bg-[#16161A],
+.theme-light .bg-[#0F0F12],
+.theme-light .bg-zinc-900\/10 {
+  background-color: #FFFFFF !important;
+  border-color: #E2E8F0 !important;
+  color: #1E293B !important;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.04), 0 8px 16px -6px rgba(15, 23, 42, 0.02) !important;
+}
+
+/* List elements background hover overrides */
+.theme-light .bg-zinc-900\/45,
+.theme-light .bg-black\/20 {
+  background-color: #F8FAFC !important;
+  border-color: #E2E8F0 !important;
+  color: #334155 !important;
+}
+
+/* Active Workspace elements in selector panel */
+.theme-light .bg-blue-500\/15 {
+  background-color: rgba(37, 99, 235, 0.08) !important;
+  border-color: rgba(37, 99, 235, 0.3) !important;
+  color: #1D4ED8 !important;
+}
+
+/* Border lines and dividers overrides */
+.theme-light .border-white\/5,
+.theme-light .border-white\/10,
+.theme-light .border-zinc-800,
+.theme-light .border-dashed {
+  border-color: #E2E8F0 !important;
+}
+
+.theme-light .border-b,
+.theme-light .border-t,
+.theme-light .border-r {
+  border-color: #E2E8F0 !important;
+}
+
+/* Input fields & Dropdown options theme styling overrides */
+.theme-light input,
+.theme-light select,
+.theme-light textarea {
+  background-color: #FFFFFF !important;
+  border-color: #CBD5E1 !important;
+  color: #0F172A !important;
+}
+
+.theme-light input::placeholder {
+  color: #94A3B8 !important;
+}
+
+.theme-light input:focus,
+.theme-light select:focus,
+.theme-light textarea:focus {
+  border-color: #3B82F6 !important;
+  background-color: #FFFFFF !important;
+  box-shadow: 0 0 0 1px #3B82F6 !important;
+  outline: none !important;
+}
+
+/* Diagnostic / general background badges overides */
+.theme-light .bg-zinc-900,
+.theme-light .bg-zinc-950,
+.theme-light .bg-zinc-950\/70,
+.theme-light .bg-[#0F0F12]\/30 {
+  background-color: #F1F5F9 !important;
+  border-color: #E2E8F0 !important;
+  color: #475569 !important;
+}
+
+/* Button UI styling in light theme */
+.theme-light button.bg-zinc-900,
+.theme-light button.bg-\[\#16161A\],
+.theme-light .p-2\\.5\\.rounded.bg-zinc-900,
+.theme-light .p-2.rounded.bg-zinc-900 {
+  background-color: #FFFFFF !important;
+  border-color: #CBD5E1 !important;
+  color: #334155 !important;
+}
+
+.theme-light button.bg-zinc-900:hover,
+.theme-light button.bg-\[\#16161A\]:hover {
+  background-color: #F8FAFC !important;
+  border-color: #94A3B8 !important;
+  color: #0f172a !important;
+}
+
+/* Color Status tag indicators overrides */
+.theme-light .text-emerald-400,
+.theme-light .text-emerald-405,
+.theme-light .text-emerald-450 {
+  color: #15803D !important;
+}
+.theme-light .bg-emerald-500\/10 {
+  background-color: rgba(21, 128, 61, 0.08) !important;
+  color: #15803D !important;
+}
+
+.theme-light .text-rose-400,
+.theme-light .text-rose-455 {
+  color: #B91C1C !important;
+}
+.theme-light .bg-rose-500\/10,
+.theme-light .bg-rose-950\/20 {
+  background-color: rgba(185, 28, 28, 0.08) !important;
+  color: #B91C1C !important;
+}
+
+.theme-light .text-amber-400,
+.theme-light .text-amber-405 {
+  color: #B45309 !important;
+}
+.theme-light .bg-amber-500\/10 {
+  background-color: rgba(180, 83, 9, 0.08) !important;
+  color: #B45309 !important;
+}
+
+.theme-light .text-blue-400 {
+  color: #1D4ED8 !important;
+}
+.theme-light .bg-blue-500\/10 {
+  background-color: rgba(29, 78, 216, 0.08) !important;
+  color: #1D4ED8 !important;
+}
+
+.theme-light .text-purple-400 {
+  color: #7E22CE !important;
+}
+.theme-light .bg-purple-500\/10 {
+  background-color: rgba(126, 34, 206, 0.08) !important;
+  color: #7E22CE !important;
+}
+
+/* SVG Chart lines and grid markers */
+.theme-light svg line {
+  stroke: rgba(15, 23, 42, 0.06) !important;
+}
+.theme-light svg text {
+  fill: #64748B !important;
+}
+.theme-light svg .fill-slate-300 {
+  fill: #0F172A !important;
+}
+
+/* Modals overlays */
+.theme-light .fixed.inset-0.bg-black\/60 {
+  background-color: rgba(15, 23, 42, 0.35) !important;
+  backdrop-filter: blur(8px) !important;
+}
+
+/* Tables details */
+.theme-light table {
+  color: #1E293B !important;
+}
+.theme-light th {
+  background-color: #F8FAFC !important;
+  color: #475569 !important;
+  border-bottom-color: #E2E8F0 !important;
+}
+.theme-light td {
+  border-bottom-color: #F1F5F9 !important;
+  color: #334155 !important;
+}
+.theme-light tr:hover {
+  background-color: #F8FAFC !important;
+}
+
+/* Splash Auth specific elements */
+.theme-light #orzo-login-card {
+  background-color: #FFFFFF !important;
+  border-color: #E2E8F0 !important;
+  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Portal Access auth page (light mockup design) */
+.portal-auth-page {
+  background: linear-gradient(180deg, #f8fafc 0%, #eef4ff 55%, #e8f0fe 100%);
+  color: #0f172a;
+}
+
+.portal-auth-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(29, 97, 225, 0.06), transparent 45%),
+    linear-gradient(180deg, #f8fafc 0%, #eef4ff 100%);
+  pointer-events: none;
+}
+
+.portal-auth-skyline-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 220px;
+  z-index: 0;
+}
+
+.portal-auth-skyline {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#orzo-login-card input {
+  color: #0f172a !important;
+}
+
+#orzo-login-card label {
+  color: #0b1f4d !important;
+}
+

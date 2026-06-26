@@ -1,0 +1,33 @@
+from django.urls import path
+
+from . import views
+
+urlpatterns = [
+    path("auth/login", views.AuthLoginView.as_view()),
+    path("init", views.InitView.as_view()),
+    path("sessions", views.SessionsListView.as_view()),
+    path("sessions/request", views.SessionRequestView.as_view()),
+    path("sessions/<str:session_id>/accept", views.SessionAcceptView.as_view()),
+    path("sessions/<str:session_id>/reject", views.SessionRejectView.as_view()),
+    path("sessions/<str:session_id>/chat", views.SessionChatView.as_view()),
+    path("sessions/<str:session_id>/complete", views.SessionCompleteView.as_view()),
+    path("sessions/<str:session_id>/intervene", views.SessionInterveneView.as_view()),
+    path("calls/dial", views.CallDialView.as_view()),
+    path("wallet/deposit", views.WalletDepositView.as_view()),
+    path("wallet/payout", views.WalletPayoutView.as_view()),
+    path("contract/create", views.ContractCreateView.as_view()),
+    path("contract/select", views.ContractSelectView.as_view()),
+    path("contract/extend", views.ContractExtendView.as_view()),
+    path("users/interpreters/create", views.InterpreterCreateView.as_view()),
+    path("users/<str:user_id>/update", views.UserUpdateView.as_view()),
+    path("scheduler/update", views.SchedulerUpdateView.as_view()),
+    path("gemini/translate", views.GeminiTranslateView.as_view()),
+    path("gemini/speech-caption", views.GeminiSpeechCaptionView.as_view()),
+    path("gemini/session-summary", views.GeminiSessionSummaryView.as_view()),
+    path("gemini/smart-match", views.GeminiSmartMatchView.as_view()),
+    path("orzo/translate", views.OrzoTranslateView.as_view()),
+    path("orzo/chat", views.OrzoChatView.as_view()),
+    path("webrtc/<str:session_id>/signal", views.WebRTCSignalPostView.as_view()),
+    path("webrtc/<str:session_id>/signals", views.WebRTCSignalPollView.as_view()),
+    path("webrtc/<str:session_id>/signals/clear", views.WebRTCSignalClearView.as_view()),
+]
