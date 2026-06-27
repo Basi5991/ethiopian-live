@@ -590,7 +590,7 @@ export default function InterpreterDashboard({
               <h2 className={`text-lg sm:text-xl font-bold tracking-tight ${
                 theme === "light" ? "text-slate-900" : "text-white"
               }`}>
-                Selam, {currentUser?.name || "Linguistic Expert"}!
+                Selam, {currentInterpreter?.name || "Linguistic Expert"}!
               </h2>
             </div>
             <p className={`text-xs ${theme === "light" ? "text-slate-600" : "text-slate-400"} max-w-xl leading-relaxed`}>
@@ -695,7 +695,7 @@ export default function InterpreterDashboard({
                 Matched to your languages:{" "}
                 {formatLanguageProficiencies(
                   interpreterLanguages,
-                  currentUser?.languageProficiencies ?? currentInterpreter?.languageProficiencies
+                  currentInterpreter?.languageProficiencies
                 )}
               </p>
             </div>
