@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket, getCurrentUserIdForSocket } from "../lib/callSocket";
 
 export type WebRTCRole = "client" | "interpreter";
@@ -226,11 +227,26 @@ export function useWebRTCCall({
   const postSignal = useCallback(async (signalType: WebRTCSignalMessage["signalType"], payload: unknown) => {
     const sid = sessionIdRef.current;
     if (!sid) return false;
+    const role = roleRef.current;
     const socket =
       signalSocketRef.current ||
-      getCallSocket(getCurrentUserIdForSocket(roleRef.current), roleRef.current);
+      getCallSocket(getCurrentUserIdForSocket(role), role);
     signalSocketRef.current = socket;
     socket.send(`webrtc.${signalType}`, { sessionId: sid, payload: (payload as Record<string, unknown>) || {} });
+
+    try {
+      await fetch(apiUrl(`/api/webrtc/${sid}/signal`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          senderRole: role,
+          signalType,
+          payload: payload ?? {},
+        }),
+      });
+    } catch {
+      /* HTTP poll fallback on peer will pick up persisted signals */
+    }
     return true;
   }, []);
 
@@ -415,6 +431,46 @@ export function useWebRTCCall({
     [acceptOfferAndAnswer, flushPendingIce, teardownMedia]
   );
 
+  const ingestRemoteSignal = useCallback(
+    (signal: WebRTCSignalMessage) => {
+      if (processedIdsRef.current.has(signal.id)) return;
+      if (!pcRef.current) {
+        pendingSignalsRef.current.push(signal);
+        return;
+      }
+      processedIdsRef.current.add(signal.id);
+      void handleRemoteSignal(signal).catch((err) => {
+        const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
+        setMediaError(message);
+      });
+    },
+    [handleRemoteSignal]
+  );
+
+  const pollPeerSignals = useCallback(async () => {
+    const sid = sessionIdRef.current;
+    const role = roleRef.current;
+    if (!sid || endedSessionsRef.current.has(sid)) return;
+
+    const peerRole = role === "client" ? "interpreter" : "client";
+    try {
+      const res = await fetch(apiUrl(`/api/webrtc/${sid}/signals?peer=${peerRole}`));
+      if (!res.ok) return;
+      const data = (await res.json()) as { signals?: WebRTCSignalMessage[] };
+      for (const raw of data.signals || []) {
+        ingestRemoteSignal({
+          id: raw.id,
+          senderRole: raw.senderRole,
+          signalType: raw.signalType,
+          payload: raw.payload || {},
+          createdAt: raw.createdAt || new Date().toISOString(),
+        });
+      }
+    } catch {
+      /* retry on next poll */
+    }
+  }, [ingestRemoteSignal]);
+
   const endCall = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (sid) {
@@ -450,16 +506,7 @@ export function useWebRTCCall({
         payload: message.signal?.payload || message.payload || {},
         createdAt: message.signal?.createdAt || new Date().toISOString(),
       };
-      if (processedIdsRef.current.has(signal.id)) return;
-      if (!pcRef.current) {
-        pendingSignalsRef.current.push(signal);
-        return;
-      }
-      processedIdsRef.current.add(signal.id);
-      void handleRemoteSignal(signal).catch((err) => {
-        const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
-        setMediaError(message);
-      });
+      ingestRemoteSignal(signal);
     });
 
     const start = async () => {
@@ -523,15 +570,14 @@ export function useWebRTCCall({
         const pendingSignals = [...pendingSignalsRef.current];
         pendingSignalsRef.current = [];
         for (const signal of pendingSignals) {
-          if (processedIdsRef.current.has(signal.id)) continue;
-          processedIdsRef.current.add(signal.id);
-          try {
-            await handleRemoteSignal(signal);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
-            setMediaError(message);
-          }
+          ingestRemoteSignal(signal);
         }
+
+        stopPollTimer();
+        void pollPeerSignals();
+        pollTimerRef.current = setInterval(() => {
+          void pollPeerSignals();
+        }, 1500);
 
         // Callee: if video was unavailable at answer time, renegotiate once camera frees up
         if (!isCallerRef.current && stream.getVideoTracks().length === 0) {
@@ -577,6 +623,9 @@ export function useWebRTCCall({
     sendRenegotiationOffer,
     teardownMedia,
     stopPollTimer,
+    pollPeerSignals,
+    ingestRemoteSignal,
+    handleRemoteSignal,
   ]);
 
   useEffect(() => {

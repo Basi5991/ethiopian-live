@@ -12,7 +12,9 @@ export function apiUrl(path: string): string {
 
   if (
     isFrontendDevHost &&
-    (normalizedPath.startsWith("/api/init") || normalizedPath.startsWith("/api/sessions/"))
+    (normalizedPath.startsWith("/api/init") ||
+      normalizedPath.startsWith("/api/sessions/") ||
+      normalizedPath.startsWith("/api/webrtc/"))
   ) {
     return `http://127.0.0.1:8000${normalizedPath}`;
   }

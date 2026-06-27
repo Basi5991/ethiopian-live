@@ -491,7 +491,10 @@ export default function InterpreterDashboard({
       if (callSnapshot) {
         setIncomingRequest(callSnapshot);
       }
+      setAcceptError(err instanceof Error ? err.message : "Could not accept call.");
       console.error(err);
+    } finally {
+      setIsAccepting(false);
     }
   };
 

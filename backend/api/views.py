@@ -1142,7 +1142,9 @@ class WebRTCSignalPostView(APIView):
 
     def post(self, request, session_id):
         try:
-            session = Session.objects.get(pk=session_id)
+            session = Session.objects.select_related(
+                "client__profile", "interpreter__profile"
+            ).get(pk=session_id)
         except Session.DoesNotExist:
             return Response({"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1170,6 +1172,10 @@ class WebRTCSignalPostView(APIView):
             signal_type=signal_type,
             payload=payload,
         )
+
+        from api.ws_notify import broadcast_webrtc_signal
+
+        broadcast_webrtc_signal(session, signal, sender_role)
 
         return Response(
             {

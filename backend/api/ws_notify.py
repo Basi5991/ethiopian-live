@@ -44,3 +44,28 @@ def notify_call_accepted(
     payload = {"type": "call.accepted", "session": session}
     broadcast_to_user(client_id, payload)
     broadcast_to_user(interpreter_id, payload)
+
+
+def broadcast_webrtc_signal(session, signal, sender_role: str) -> None:
+    """Mirror CallConsumer WebRTC fan-out for REST-posted signals."""
+    outbound = {
+        "type": f"webrtc.{signal.signal_type}",
+        "sessionId": session.id,
+        "senderRole": sender_role,
+        "signal": {
+            "id": signal.id,
+            "senderRole": signal.sender_role,
+            "signalType": signal.signal_type,
+            "payload": signal.payload,
+            "createdAt": signal.created_at.isoformat(),
+        },
+        "payload": signal.payload,
+    }
+    if sender_role == "client":
+        interpreter_id = None
+        if session.interpreter and hasattr(session.interpreter, "profile"):
+            interpreter_id = session.interpreter.profile.external_id
+        broadcast_to_user(interpreter_id, outbound)
+    else:
+        client_id = session.client.profile.external_id if hasattr(session.client, "profile") else None
+        broadcast_to_user(client_id, outbound)

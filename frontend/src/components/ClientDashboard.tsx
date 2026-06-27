@@ -334,25 +334,34 @@ export default function ClientDashboard({
     }
   }, [sessions, clientId, activeSession?.id]);
 
-  // Outgoing Dialing Ringer Loop
+  // Outgoing Dialing Ringer Loop — stop as soon as the call is live (accepted)
   useEffect(() => {
     let intervalId: any;
-    if (activeSession && activeSession.status === "incoming") {
+    if (activeSession && !isCallLive(activeSession)) {
       playRingTone();
       intervalId = setInterval(playRingTone, 4000);
     }
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [activeSession?.status, activeSession?.id]);
+  }, [activeSession?.status, activeSession?.interpreterId, activeSession?.id]);
 
   useEffect(() => {
-    if (activeSession?.status !== "incoming") return;
+    if (!activeSession || isCallLive(activeSession)) return;
     const refreshId = window.setInterval(() => {
       onActionComplete();
-    }, 1000);
+    }, 2000);
     return () => window.clearInterval(refreshId);
-  }, [activeSession?.status, activeSession?.id, onActionComplete]);
+  }, [activeSession?.status, activeSession?.interpreterId, activeSession?.id, onActionComplete]);
+
+  // Promote to active when poller sees the interpreter accepted on the server
+  useEffect(() => {
+    if (!activeSession?.id || isCallLive(activeSession)) return;
+    const match = sessions.find((s) => s.id === activeSession.id);
+    if (match && isCallLive(match)) {
+      setActiveSession((prev) => mergeLiveSession(prev, match));
+    }
+  }, [sessions, activeSession?.id, activeSession?.status, activeSession?.interpreterId]);
 
   useEffect(() => {
     if (contractDetails) {
