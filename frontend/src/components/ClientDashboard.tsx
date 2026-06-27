@@ -8,6 +8,7 @@ import {
 import { User, Session, Transaction, ContractDetails } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
+import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
 import { interpreterSupportsLanguagePair } from "../lib/interpreterMatching";
 
@@ -297,8 +298,10 @@ export default function ClientDashboard({
     setActiveSession((prev) => {
       if (!prev || prev.id === dismissedSessionId) return null;
       const match = sessions.find((s) => s.id === prev.id);
+      if (!match && LIVE_CLIENT_STATUSES.includes(prev.status)) return prev;
       if (!match) return null;
       if (["cancelled", "completed", "missed"].includes(match.status)) return null;
+      if (LIVE_CLIENT_STATUSES.includes(match.status)) return match;
       return prev;
     });
   }, [sessions, dismissedSessionId, liveClientSession]);
@@ -524,7 +527,7 @@ export default function ClientDashboard({
       const transData = await transRes.json();
       const translated = transData.translatedText || "";
 
-      await fetch(`/api/sessions/${activeSession.id}/chat`, {
+      await fetch(apiUrl(`/api/sessions/${activeSession.id}/chat`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -563,7 +566,7 @@ export default function ClientDashboard({
       if (data.captions && Array.isArray(data.captions)) {
         for (const line of data.captions) {
           await new Promise(resolve => setTimeout(resolve, 1400));
-          await fetch(`/api/sessions/${activeSession.id}/chat`, {
+          await fetch(apiUrl(`/api/sessions/${activeSession.id}/chat`), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -590,7 +593,7 @@ export default function ClientDashboard({
 
     setIsSubmittingRating(true);
     try {
-      const res = await fetch(`/api/sessions/${sessionToRate.id}/complete`, {
+      const res = await fetch(apiUrl(`/api/sessions/${sessionToRate.id}/complete`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -630,7 +633,7 @@ export default function ClientDashboard({
     clearCallMedia();
 
     try {
-      const res = await fetch(`/api/sessions/${session.id}/complete`, {
+      const res = await fetch(apiUrl(`/api/sessions/${session.id}/complete`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -642,6 +645,7 @@ export default function ClientDashboard({
       if (res.ok) {
         const data = await res.json();
         const completedSession = data.session || { ...session, status: "completed" as const };
+        callSocket.send("call.end", { sessionId: session.id });
         promptedRatingSessionIds.current.add(completedSession.id);
         openRatingPopup(completedSession);
         onActionComplete();

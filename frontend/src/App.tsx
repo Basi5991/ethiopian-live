@@ -5,6 +5,7 @@ import {
   Sun, Moon
 } from "lucide-react";
 import { User, Session, Transaction, AuditLog, InterpreterAvailability, ContractDetails } from "./types";
+import { apiUrl } from "./lib/apiUrl";
 import { mergeUsersWithLocal, registerInterpreter } from "./lib/interpreterRegistration";
 import { mergeUsersWithLocalClients, registerInstitutionClient } from "./lib/clientRegistration";
 import AdminDashboard from "./components/AdminDashboard";
@@ -67,7 +68,7 @@ export default function App() {
       const initUrl = clientId
         ? `/api/init?clientId=${encodeURIComponent(clientId)}`
         : "/api/init";
-      const res = await fetch(initUrl);
+      const res = await fetch(apiUrl(initUrl));
       const contentType = res.headers.get("content-type");
       if (res.ok && contentType && contentType.includes("application/json")) {
         const data = await res.json();

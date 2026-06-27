@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Calendar, Check, Power, Briefcase, FileText, AlertTriangle, 
@@ -8,6 +8,7 @@ import {
 import { User, Session, Transaction, InterpreterAvailability, Slot } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
+import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
 import {
   formatLanguageProficiencies,
@@ -15,10 +16,31 @@ import {
   isDirectDialSession,
 } from "../lib/interpreterMatching";
 
-// Dynamic Incoming Call ring signaler
-const playIncomingCallBeep = () => {
+let incomingRingAudioContext: AudioContext | null = null;
+
+const unlockIncomingCallAudio = async () => {
   try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return false;
+
+    incomingRingAudioContext = incomingRingAudioContext || new AudioContextClass();
+    if (incomingRingAudioContext.state === "suspended") {
+      await incomingRingAudioContext.resume();
+    }
+    return incomingRingAudioContext.state === "running";
+  } catch {
+    return false;
+  }
+};
+
+// Dynamic Incoming Call ring signaler
+const playIncomingCallBeep = async () => {
+  try {
+    const audioCtx = incomingRingAudioContext || new (window.AudioContext || (window as any).webkitAudioContext)();
+    incomingRingAudioContext = audioCtx;
+    if (audioCtx.state === "suspended") {
+      await audioCtx.resume();
+    }
     const osc1 = audioCtx.createOscillator();
     const osc2 = audioCtx.createOscillator();
     const gainNode = audioCtx.createGain();
@@ -37,7 +59,6 @@ const playIncomingCallBeep = () => {
     setTimeout(() => {
       osc1.stop();
       osc2.stop();
-      audioCtx.close();
     }, 800);
   } catch (e) {}
 };
@@ -81,7 +102,7 @@ export default function InterpreterDashboard({
   theme = "dark"
 }: InterpreterDashboardProps) {
   // Retrieve authenticated user from localStorage
-  const currentUser = (() => {
+  const savedUser = (() => {
     try {
       const saved = localStorage.getItem("orzo_auth_user");
       return saved ? JSON.parse(saved) : null;
@@ -91,9 +112,10 @@ export default function InterpreterDashboard({
   })();
 
   // Current logged in interpreter
-  const interpreterId = currentUser?.id || "usr_int1";
-  const currentInterpreter = users.find(u => u.id === interpreterId) || users.find(u => u.role === "interpreter") || users[2];
-  const interpreterLanguages = currentUser?.languages ?? currentInterpreter?.languages ?? [];
+  const currentUser = savedUser?.role === "interpreter" ? savedUser : null;
+  const currentInterpreter = currentUser || users.find(u => u.role === "interpreter") || users[2];
+  const interpreterId = currentInterpreter?.id || "usr_int1";
+  const interpreterLanguages = currentInterpreter?.languages ?? [];
   const callSocket = React.useMemo(() => getCallSocket(interpreterId, "interpreter"), [interpreterId]);
 
   // Dashboard Slider Section Switcher
@@ -128,9 +150,22 @@ export default function InterpreterDashboard({
   const [countdown, setCountdown] = useState(60);
   const [isAccepting, setIsAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState("");
+  const [ringAudioReady, setRingAudioReady] = useState(false);
   const acceptedSessionIds = useRef<Set<string>>(new Set());
+  const endedSessionIds = useRef<Set<string>>(new Set());
   const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [callLockSessionId, setCallLockSessionId] = useState<string | null>(null);
+  const activeSessionRef = useRef<Session | null>(null);
+  const incomingRequestRef = useRef<Session | null>(null);
+  const callLockSessionIdRef = useRef<string | null>(null);
+  const onlineStatusRef = useRef(onlineStatus);
+  const onActionCompleteRef = useRef(onActionComplete);
+
+  activeSessionRef.current = activeSession;
+  incomingRequestRef.current = incomingRequest;
+  callLockSessionIdRef.current = callLockSessionId;
+  onlineStatusRef.current = onlineStatus;
+  onActionCompleteRef.current = onActionComplete;
   const stopIncomingRing = () => {
     if (ringIntervalRef.current) {
       clearInterval(ringIntervalRef.current);
@@ -142,56 +177,22 @@ export default function InterpreterDashboard({
     !isAccepting &&
     !activeSession &&
     !callLockSessionId &&
-    !acceptedSessionIds.current.has(incomingRequest.id)
+    !acceptedSessionIds.current.has(incomingRequest.id) &&
+    !endedSessionIds.current.has(incomingRequest.id)
       ? incomingRequest
       : null;
 
   useEffect(() => {
-    return callSocket.subscribe((message) => {
-      if (message.type === "call.ringing") {
-        if (onlineStatus === "active" && !activeSession && !callLockSessionId && !acceptedSessionIds.current.has(message.session.id)) {
-          setIncomingRequest(message.session);
-          setDismissedSessionId(null);
-        }
-      } else if (message.type === "call.accepted") {
-        const assignedInterpreterId = message.session.interpreterId;
-        if (assignedInterpreterId === interpreterId) {
-          acceptedSessionIds.current.add(message.session.id);
-          setCallLockSessionId(message.session.id);
-          stopIncomingRing();
-          setIncomingRequest(null);
-          setDismissedSessionId(null);
-          setActiveSession(message.session);
-          onActionComplete();
-        } else if (incomingRequest?.id === message.session.id) {
-          setIncomingRequest(null);
-          stopIncomingRing();
-        }
-        setIsAccepting(false);
-      } else if (message.type === "call.ended") {
-        if (activeSession?.id === message.session.id || incomingRequest?.id === message.session.id) {
-          setDismissedSessionId(message.session.id);
-          setIncomingRequest(null);
-          endSessionLocally();
-          onActionComplete();
-        }
-      } else if (message.type === "call.error") {
-        setAcceptError(message.error);
-        setIsAccepting(false);
-        setCallLockSessionId(null);
-      }
-    });
-  }, [callSocket, activeSession, incomingRequest, callLockSessionId, interpreterId, onlineStatus, onActionComplete]);
-
-  // Ring for any language-qualified incoming call (broadcast or direct dial)
-  useEffect(() => {
-    stopIncomingRing();
-    if (visibleIncomingRequest && onlineStatus === "active") {
-      playIncomingCallBeep();
-      ringIntervalRef.current = setInterval(playIncomingCallBeep, 3500);
-    }
-    return stopIncomingRing;
-  }, [visibleIncomingRequest?.id, onlineStatus]);
+    const unlock = () => {
+      void unlockIncomingCallAudio().then(setRingAudioReady);
+    };
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
 
   const clearCallMedia = () => {
     setCallMediaStream((prev) => {
@@ -200,22 +201,85 @@ export default function InterpreterDashboard({
     });
   };
 
-  const endSessionLocally = () => {
-    setActiveSession(null);
+  const markSessionEnded = useCallback((sessionId: string) => {
+    endedSessionIds.current.add(sessionId);
+    setDismissedSessionId(sessionId);
+    acceptedSessionIds.current.delete(sessionId);
     setCallLockSessionId(null);
+    setActiveSession(null);
+    setIncomingRequest(null);
     stopIncomingRing();
     clearCallMedia();
-  };
+  }, []);
+
+  useEffect(() => {
+    return callSocket.subscribe((message) => {
+      if (message.type === "call.ringing") {
+        if (endedSessionIds.current.has(message.session.id)) return;
+        if (
+          onlineStatusRef.current === "active" &&
+          !activeSessionRef.current &&
+          !callLockSessionIdRef.current &&
+          !acceptedSessionIds.current.has(message.session.id)
+        ) {
+          setIncomingRequest(message.session);
+        }
+      } else if (message.type === "call.accepted") {
+        if (endedSessionIds.current.has(message.session.id)) return;
+        const assignedInterpreterId = message.session.interpreterId;
+        if (assignedInterpreterId === interpreterId) {
+          acceptedSessionIds.current.add(message.session.id);
+          setCallLockSessionId(message.session.id);
+          stopIncomingRing();
+          setIncomingRequest(null);
+          setActiveSession(message.session);
+          onActionCompleteRef.current();
+        } else if (incomingRequestRef.current?.id === message.session.id) {
+          setIncomingRequest(null);
+          stopIncomingRing();
+        }
+        setIsAccepting(false);
+      } else if (message.type === "call.ended") {
+        endedSessionIds.current.add(message.session.id);
+        if (
+          activeSessionRef.current?.id === message.session.id ||
+          incomingRequestRef.current?.id === message.session.id ||
+          callLockSessionIdRef.current === message.session.id
+        ) {
+          markSessionEnded(message.session.id);
+          onActionCompleteRef.current();
+        }
+      } else if (message.type === "call.error") {
+        setAcceptError(message.error);
+        setIsAccepting(false);
+        setCallLockSessionId(null);
+      }
+    });
+  }, [callSocket, interpreterId, markSessionEnded]);
+
+  // Ring for any language-qualified incoming call (broadcast or direct dial)
+  useEffect(() => {
+    stopIncomingRing();
+    if (visibleIncomingRequest && onlineStatus === "active") {
+      void playIncomingCallBeep().then(() => setRingAudioReady(incomingRingAudioContext?.state === "running"));
+      ringIntervalRef.current = setInterval(() => void playIncomingCallBeep(), 3500);
+    }
+    return stopIncomingRing;
+  }, [visibleIncomingRequest?.id, onlineStatus]);
 
   // Track state changes & live triggers
   useEffect(() => {
     const currentActive = sessions.find(
-      (s) => s.interpreterId === interpreterId && s.status === "active" && s.id !== dismissedSessionId
+      (s) =>
+        s.interpreterId === interpreterId &&
+        s.status === "active" &&
+        s.id !== dismissedSessionId &&
+        !endedSessionIds.current.has(s.id)
     );
 
     // 1. Locate active session — keep optimistic accept until server confirms or call ends
     setActiveSession((prev) => {
-      if (prev?.id === dismissedSessionId) return null;
+      if (prev?.id === dismissedSessionId || endedSessionIds.current.has(prev?.id || "")) return null;
 
       if (currentActive) {
         setCallLockSessionId(currentActive.id);
@@ -224,9 +288,14 @@ export default function InterpreterDashboard({
       }
 
       if (prev?.status === "active") {
+        if (endedSessionIds.current.has(prev.id)) {
+          setCallLockSessionId(null);
+          return null;
+        }
         const match = sessions.find((s) => s.id === prev.id);
         if (!match) return prev;
         if (["cancelled", "completed", "missed"].includes(match.status)) {
+          endedSessionIds.current.add(prev.id);
           setCallLockSessionId(null);
           acceptedSessionIds.current.delete(prev.id);
           return null;
@@ -246,10 +315,11 @@ export default function InterpreterDashboard({
     );
 
     setIncomingRequest((prev) => {
-      if (prev && acceptedSessionIds.current.has(prev.id)) return null;
+      if (prev && (acceptedSessionIds.current.has(prev.id) || endedSessionIds.current.has(prev.id))) return null;
       if (isAccepting) return null;
       if (callLockSessionId) return null;
       if (currentActive || activeSession?.status === "active") return null;
+      if (nextIncoming && endedSessionIds.current.has(nextIncoming.id)) return prev;
       return prev || nextIncoming || null;
     });
   }, [sessions, onlineStatus, interpreterId, interpreterLanguages, dismissedSessionId, activeSession, isAccepting, callLockSessionId]);
@@ -429,7 +499,7 @@ export default function InterpreterDashboard({
       const translated = transData.translatedText || "";
 
       // 2. Commit chat line to the live store
-      await fetch(`/api/sessions/${activeSession.id}/chat`, {
+      await fetch(apiUrl(`/api/sessions/${activeSession.id}/chat`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -644,6 +714,24 @@ export default function InterpreterDashboard({
         </div>
       )}
 
+      {visibleIncomingRequest && !ringAudioReady && (
+        <div className="col-span-12 px-4 py-3 rounded-xl bg-blue-950/40 border border-blue-500/30 text-blue-100 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <span>Browser audio is blocked. Click once to enable the incoming call beep.</span>
+          <button
+            type="button"
+            onClick={() => {
+              void unlockIncomingCallAudio().then((ready) => {
+                setRingAudioReady(ready);
+                if (ready) void playIncomingCallBeep();
+              });
+            }}
+            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase tracking-wide"
+          >
+            Enable Ring Sound
+          </button>
+        </div>
+      )}
+
       {/* Interactive Slider Section Switcher to prevent elongated scrolling */}
       <div className="col-span-12 flex items-center justify-center pt-2 pb-1">
         <div className={`p-1 rounded-2xl border flex items-center gap-1.5 w-full max-w-md relative ${
@@ -700,12 +788,7 @@ export default function InterpreterDashboard({
               onEndCall={async () => {
                 if (!activeSession) return;
                 const sessionId = activeSession.id;
-                setDismissedSessionId(sessionId);
-                setActiveSession(null);
-                setCallLockSessionId(null);
-                acceptedSessionIds.current.delete(sessionId);
-                stopIncomingRing();
-                clearCallMedia();
+                markSessionEnded(sessionId);
                 try {
                   callSocket.send("call.end", { sessionId });
                 } catch (e) {
@@ -714,10 +797,7 @@ export default function InterpreterDashboard({
                 onActionComplete();
               }}
               onPeerHangup={(sessionId) => {
-                setDismissedSessionId(sessionId);
-                setCallLockSessionId(null);
-                acceptedSessionIds.current.delete(sessionId);
-                endSessionLocally();
+                markSessionEnded(sessionId);
               }}
             />
             </div>

@@ -1,5 +1,5 @@
 import React from "react";
-import { PhoneCall, PhoneOff, Wifi, RefreshCw, Volume2 } from "lucide-react";
+import { PhoneCall, PhoneOff, Wifi, RefreshCw, Volume2, Mic, MicOff } from "lucide-react";
 import { useWebRTCCall, WebRTCRole } from "../hooks/useWebRTCCall";
 
 interface WebRTCCallPanelProps {
@@ -40,6 +40,8 @@ export default function WebRTCCallPanel({
     localReady,
     remoteReady,
     playbackBlocked,
+    isMuted,
+    toggleMute,
     resumeRemoteMedia,
     endCall,
   } = useWebRTCCall({ sessionId, role, isCaller, enabled, initialStream, onPeerHangup });
@@ -91,6 +93,12 @@ export default function WebRTCCallPanel({
             {localLabel}
           </span>
           <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          {isMuted && localReady && (
+            <div className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-lg bg-amber-500/90 px-2 py-1 text-[9px] font-bold uppercase text-black">
+              <MicOff className="w-3 h-3" />
+              Muted
+            </div>
+          )}
           {!localReady && (
             <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-xs bg-zinc-950/80">
               Starting camera…
@@ -141,6 +149,20 @@ export default function WebRTCCallPanel({
       )}
 
       <div className="flex gap-2 justify-center z-10 w-full shrink-0 pt-1">
+        <button
+          type="button"
+          disabled={!localReady || isEnding}
+          onClick={toggleMute}
+          aria-pressed={isMuted}
+          className={`px-4 py-2 disabled:opacity-50 text-white text-xs font-bold uppercase rounded-xl flex items-center gap-1.5 ${
+            isMuted
+              ? "bg-amber-600 hover:bg-amber-500"
+              : "bg-zinc-700 hover:bg-zinc-600 border border-white/10"
+          }`}
+        >
+          {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+          {isMuted ? "Unmute" : "Mute"}
+        </button>
         <button
           type="button"
           disabled={isEnding}

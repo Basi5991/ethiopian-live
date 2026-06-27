@@ -90,6 +90,40 @@ interface UseWebRTCCallOptions {
   onPeerHangup?: (sessionId: string) => void;
 }
 
+function getOrderedTransceiver(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpTransceiver | null {
+  const index = kind === "audio" ? 0 : 1;
+  return pc.getTransceivers()[index] ?? null;
+}
+
+function getTransceiverSender(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpSender | null {
+  return getOrderedTransceiver(pc, kind)?.sender ?? null;
+}
+
+async function configureOrderedLocalMedia(pc: RTCPeerConnection, stream: MediaStream) {
+  // Caller offer m-lines must stay audio first, then video.
+  if (pc.getTransceivers().length === 0) {
+    pc.addTransceiver("audio", { direction: "sendrecv" });
+    pc.addTransceiver("video", { direction: "sendrecv" });
+  }
+  await attachLocalTracksToOfferTransceivers(pc, stream);
+}
+
+async function attachLocalTracksToOfferTransceivers(pc: RTCPeerConnection, stream: MediaStream) {
+  const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live") || null;
+  const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live") || null;
+  const audioTransceiver = getOrderedTransceiver(pc, "audio");
+  const videoTransceiver = getOrderedTransceiver(pc, "video");
+
+  if (audioTransceiver) {
+    audioTransceiver.direction = "sendrecv";
+    await audioTransceiver.sender.replaceTrack(audioTrack);
+  }
+  if (videoTransceiver) {
+    videoTransceiver.direction = "sendrecv";
+    await videoTransceiver.sender.replaceTrack(videoTrack);
+  }
+}
+
 async function tryAddVideoTrack(stream: MediaStream, pc: RTCPeerConnection): Promise<boolean> {
   if (stream.getVideoTracks().some((t) => t.readyState === "live")) return false;
 
@@ -105,8 +139,11 @@ async function tryAddVideoTrack(stream: MediaStream, pc: RTCPeerConnection): Pro
       const videoTrack = videoStream.getVideoTracks()[0];
       if (!videoTrack) continue;
       stream.addTrack(videoTrack);
-      pc.addTrack(videoTrack, stream);
-      return true;
+      const videoSender = getTransceiverSender(pc, "video");
+      if (videoSender) {
+        await videoSender.replaceTrack(videoTrack);
+      }
+      return Boolean(videoSender);
     } catch {
       /* try next */
     }
@@ -144,6 +181,7 @@ export function useWebRTCCall({
   const [localReady, setLocalReady] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
   const [playbackBlocked, setPlaybackBlocked] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   const [, setVideoBindTick] = useState(0);
 
   const sessionIdRef = useRef(sessionId);
@@ -212,6 +250,11 @@ export function useWebRTCCall({
   const acceptOfferAndAnswer = useCallback(
     async (pc: RTCPeerConnection, offer: RTCSessionDescriptionInit) => {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const localStream = localStreamRef.current;
+      if (localStream) {
+        await tryAddVideoTrack(localStream, pc);
+        await attachLocalTracksToOfferTransceivers(pc, localStream);
+      }
       await flushPendingIce(pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -243,6 +286,10 @@ export function useWebRTCCall({
       if (renegotiatingRef.current || isCallerRef.current) return;
       renegotiatingRef.current = true;
       try {
+        const stream = localStreamRef.current;
+        if (stream) {
+          await attachLocalTracksToOfferTransceivers(pc, stream);
+        }
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         if (pc.localDescription) {
@@ -283,8 +330,24 @@ export function useWebRTCCall({
     setLocalReady(false);
     setRemoteReady(false);
     setPlaybackBlocked(false);
+    setIsMuted(false);
     setConnectionState("closed");
   }, [stopPollTimer]);
+
+  const toggleMute = useCallback(() => {
+    const stream = localStreamRef.current;
+    if (!stream) return;
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length === 0) return;
+
+    setIsMuted((prev) => {
+      const nextMuted = !prev;
+      audioTracks.forEach((track) => {
+        track.enabled = !nextMuted;
+      });
+      return nextMuted;
+    });
+  }, []);
 
   const resumeRemoteMedia = useCallback(async () => {
     try {
@@ -303,17 +366,30 @@ export function useWebRTCCall({
       if (signal.signalType === "offer") {
         if (!hasSessionDescription(signal.payload)) return;
 
-        if (pc.signalingState === "stable") {
-          await acceptOfferAndAnswer(pc, signal.payload);
-        } else if (pc.signalingState === "have-local-offer" && isCallerRef.current) {
-          // Roll back our offer and accept the remote one (glare handling)
-          await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
-          await acceptOfferAndAnswer(pc, signal.payload);
+        try {
+          if (pc.signalingState === "stable") {
+            await acceptOfferAndAnswer(pc, signal.payload);
+          } else if (pc.signalingState === "have-local-offer" && isCallerRef.current) {
+            // Roll back our offer and accept the remote one (glare handling)
+            await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
+            await acceptOfferAndAnswer(pc, signal.payload);
+          }
+          setMediaError(null);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "WebRTC offer negotiation failed.";
+          setMediaError(message);
         }
       } else if (signal.signalType === "answer" && isCallerRef.current) {
-        if (pc.signalingState === "have-local-offer" && hasSessionDescription(signal.payload)) {
+        if (pc.signalingState !== "have-local-offer" || !hasSessionDescription(signal.payload)) {
+          return;
+        }
+        try {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
           await flushPendingIce(pc);
+          setMediaError(null);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "WebRTC answer negotiation failed.";
+          setMediaError(message);
         }
       } else if (signal.signalType === "ice") {
         if (!hasIceCandidate(signal.payload)) return;
@@ -380,7 +456,10 @@ export function useWebRTCCall({
         return;
       }
       processedIdsRef.current.add(signal.id);
-      void handleRemoteSignal(signal);
+      void handleRemoteSignal(signal).catch((err) => {
+        const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
+        setMediaError(message);
+      });
     });
 
     const start = async () => {
@@ -402,12 +481,15 @@ export function useWebRTCCall({
 
         localStreamRef.current = stream;
         setLocalReady(true);
+        setIsMuted(false);
         setMediaError(null);
         setVideoBindTick((n) => n + 1);
 
         const pc = new RTCPeerConnection(ICE_SERVERS);
         pcRef.current = pc;
-        stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+        if (isCallerRef.current) {
+          await configureOrderedLocalMedia(pc, stream);
+        }
 
         pc.ontrack = (event) => {
           attachRemoteTrack(event.track);
@@ -430,15 +512,6 @@ export function useWebRTCCall({
           }
         };
 
-        // Callee: ensure video is attached before answering the client's offer
-        if (!isCallerRef.current) {
-          const addedVideo = await tryAddVideoTrack(stream, pc);
-          if (addedVideo) {
-            setVideoBindTick((n) => n + 1);
-            bindVideoElements();
-          }
-        }
-
         if (isCallerRef.current) {
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -452,7 +525,12 @@ export function useWebRTCCall({
         for (const signal of pendingSignals) {
           if (processedIdsRef.current.has(signal.id)) continue;
           processedIdsRef.current.add(signal.id);
-          await handleRemoteSignal(signal);
+          try {
+            await handleRemoteSignal(signal);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
+            setMediaError(message);
+          }
         }
 
         // Callee: if video was unavailable at answer time, renegotiate once camera frees up
@@ -513,6 +591,8 @@ export function useWebRTCCall({
     localReady,
     remoteReady,
     playbackBlocked,
+    isMuted,
+    toggleMute,
     resumeRemoteMedia,
     endCall,
   };
