@@ -13,7 +13,8 @@ services:
     runtime: python
     plan: free
     buildCommand: bash build.sh
-    startCommand: cd backend && gunicorn terjuman.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    # WebSocket calls require ASGI (Daphne). Gunicorn WSGI cannot serve /ws/calls/.
+    startCommand: cd backend && daphne -b 0.0.0.0 -p $PORT terjuman.asgi:application
     healthCheckPath: /api/init
     envVars:
       - key: PYTHON_VERSION
