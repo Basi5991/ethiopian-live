@@ -123,6 +123,7 @@ export function useWebRTCCall({
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [localReady, setLocalReady] = useState(false);
   const [remoteReady, setRemoteReady] = useState(false);
+  const [playbackBlocked, setPlaybackBlocked] = useState(false);
   const [, setVideoBindTick] = useState(0);
 
   const sessionIdRef = useRef(sessionId);
@@ -152,7 +153,11 @@ export function useWebRTCCall({
       if (remoteVideoRef.current.srcObject !== remoteStream) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
-      void remoteVideoRef.current.play().catch(() => {});
+      remoteVideoRef.current.muted = false;
+      void remoteVideoRef.current
+        .play()
+        .then(() => setPlaybackBlocked(false))
+        .catch(() => setPlaybackBlocked(true));
     }
   }, []);
 
@@ -241,8 +246,18 @@ export function useWebRTCCall({
     processedIdsRef.current.clear();
     setLocalReady(false);
     setRemoteReady(false);
+    setPlaybackBlocked(false);
     setConnectionState("closed");
   }, [stopPollTimer]);
+
+  const resumeRemoteMedia = useCallback(async () => {
+    try {
+      await remoteVideoRef.current?.play();
+      setPlaybackBlocked(false);
+    } catch {
+      setPlaybackBlocked(true);
+    }
+  }, []);
 
   const handleRemoteSignal = useCallback(
     async (signal: WebRTCSignalMessage) => {
@@ -470,6 +485,8 @@ export function useWebRTCCall({
     mediaError,
     localReady,
     remoteReady,
+    playbackBlocked,
+    resumeRemoteMedia,
     endCall,
   };
 }

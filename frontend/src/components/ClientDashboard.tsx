@@ -968,7 +968,7 @@ export default function ClientDashboard({
                       sessionId={activeSession.id}
                       role="client"
                       isCaller
-                      enabled={activeSession.status === "incoming" || activeSession.status === "active"}
+                      enabled={activeSession.status === "active"}
                       initialStream={callMediaStream}
                       status={activeSession.status}
                       peerName={activeSession.interpreterName || "Interpreter"}

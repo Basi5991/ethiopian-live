@@ -1,5 +1,5 @@
 import React from "react";
-import { PhoneCall, PhoneOff, Wifi, RefreshCw } from "lucide-react";
+import { PhoneCall, PhoneOff, Wifi, RefreshCw, Volume2 } from "lucide-react";
 import { useWebRTCCall, WebRTCRole } from "../hooks/useWebRTCCall";
 
 interface WebRTCCallPanelProps {
@@ -39,6 +39,8 @@ export default function WebRTCCallPanel({
     mediaError,
     localReady,
     remoteReady,
+    playbackBlocked,
+    resumeRemoteMedia,
     endCall,
   } = useWebRTCCall({ sessionId, role, isCaller, enabled, initialStream, onPeerHangup });
 
@@ -116,6 +118,20 @@ export default function WebRTCCallPanel({
             </div>
             <h3 className="text-sm font-bold text-white">Calling {peerName}</h3>
             <p className="text-xs text-slate-400 mt-1">Waiting for interpreter to accept…</p>
+          </div>
+        )}
+
+        {playbackBlocked && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm text-center px-6">
+            <button
+              type="button"
+              onClick={() => void resumeRemoteMedia()}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold uppercase"
+            >
+              <Volume2 className="w-4 h-4" />
+              Enable Call Audio/Video
+            </button>
+            <p className="text-[10px] text-slate-400 mt-2">Browser blocked remote media playback.</p>
           </div>
         )}
       </div>

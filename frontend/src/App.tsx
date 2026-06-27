@@ -104,7 +104,7 @@ export default function App() {
 
   useEffect(() => {
     fetchState();
-    const interval = setInterval(fetchState, 5000);
+    const interval = setInterval(fetchState, 2000);
     return () => clearInterval(interval);
   }, [authenticatedUser?.id]);
 
