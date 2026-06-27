@@ -10,6 +10,7 @@ import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
 import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
+import { callPanelStatus, mergeLiveSession } from "../lib/liveSession";
 import {
   formatLanguageProficiencies,
   findIncomingSessionForInterpreter,
@@ -246,7 +247,7 @@ export default function InterpreterDashboard({
           setCallLockSessionId(message.session.id);
           stopIncomingRing();
           setIncomingRequest(null);
-          setActiveSession(message.session);
+          setActiveSession((prev) => mergeLiveSession(prev, { ...message.session, status: "active" }));
           onActionCompleteRef.current();
         } else if (incomingRequestRef.current?.id === message.session.id) {
           setIncomingRequest(null);
@@ -264,6 +265,7 @@ export default function InterpreterDashboard({
           onActionCompleteRef.current();
         }
       } else if (message.type === "call.error") {
+        if (activeSessionRef.current?.status === "active") return;
         setAcceptError(message.error);
         setIsAccepting(false);
         setCallLockSessionId(null);
@@ -456,11 +458,28 @@ export default function InterpreterDashboard({
       if (stream) {
         setCallMediaStream(stream);
       }
-      callSocket.send("call.accept", {
-        sessionId,
-        interpreterId,
-        interpreterName: currentInterpreter?.name,
+
+      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/accept`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          interpreterId,
+          interpreterName: currentInterpreter?.name,
+        }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.session) {
+        setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
+        onActionComplete();
+        setIsAccepting(false);
+      } else if (res.status === 409) {
+        onActionComplete();
+        setIsAccepting(false);
+      } else if (!res.ok && data.error) {
+        throw new Error(String(data.error));
+      } else {
+        setIsAccepting(false);
+      }
     } catch (err) {
       setActiveSession(null);
       setCallLockSessionId(null);
@@ -792,9 +811,9 @@ export default function InterpreterDashboard({
               sessionId={activeSession.id}
               role="interpreter"
               isCaller={false}
-              enabled
+              enabled={callPanelStatus(activeSession) === "active"}
               initialStream={callMediaStream}
-              status={activeSession.status === "active" ? "active" : "incoming"}
+              status={callPanelStatus(activeSession)}
               peerName={activeSession.clientName}
               languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
               localLabel={`You: ${currentInterpreter.name}`}

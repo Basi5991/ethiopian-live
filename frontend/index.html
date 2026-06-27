@@ -8,6 +8,38 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="boot-fallback" hidden style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:0.75rem;font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding:1.5rem">
+      <strong>Server is starting up</strong>
+      <span style="opacity:0.75;font-size:0.875rem">Free hosting can take up to a minute after idle. Retrying automatically…</span>
+    </div>
+    <script>
+      (function () {
+        var retries = 0;
+        var maxRetries = 15;
+        var fallback = document.getElementById("boot-fallback");
+        function showFallback() {
+          if (fallback) fallback.hidden = false;
+        }
+        window.addEventListener(
+          "error",
+          function (event) {
+            var target = event.target;
+            if (!target || (target.tagName !== "SCRIPT" && target.tagName !== "LINK")) return;
+            showFallback();
+            if (retries++ < maxRetries) {
+              setTimeout(function () {
+                location.reload();
+              }, 4000);
+            }
+          },
+          true
+        );
+        setTimeout(function () {
+          var root = document.getElementById("root");
+          if (root && !root.innerHTML.trim()) showFallback();
+        }, 10000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

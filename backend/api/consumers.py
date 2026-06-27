@@ -9,6 +9,7 @@ from channels.generic.websocket import JsonWebsocketConsumer
 
 from .models import Session, WebRTCSignal
 from .services import call_state
+from .ws_notify import broadcast_to_interpreters, broadcast_to_user, notify_call_accepted
 
 
 def _group_name(prefix: str, value: str | None) -> str:
@@ -62,11 +63,13 @@ class CallConsumer(JsonWebsocketConsumer):
         self.send_json(event["payload"])
 
     def _send_group(self, group: str, payload: dict[str, Any]):
+        if group == "role_interpreters":
+            broadcast_to_interpreters(payload)
+            return
         async_to_sync(self.channel_layer.group_send)(group, {"type": "call.message", "payload": payload})
 
     def _send_user(self, user_id: str | None, payload: dict[str, Any]):
-        if user_id:
-            self._send_group(_group_name("user", user_id), payload)
+        broadcast_to_user(user_id, payload)
 
     def _handle_call_request(self, payload: dict[str, Any]):
         data = {**payload, "clientId": payload.get("clientId") or self.user_id}
@@ -98,9 +101,7 @@ class CallConsumer(JsonWebsocketConsumer):
             self.send_json({"type": "call.error", "error": result.error, "status": result.status, "session": result.session})
             return
 
-        accepted_payload = {"type": "call.accepted", "session": result.session}
-        self._send_user(result.client_id, accepted_payload)
-        self._send_user(result.target_interpreter_id, accepted_payload)
+        notify_call_accepted(result.session, result.client_id, result.target_interpreter_id)
 
     def _handle_call_end(self, payload: dict[str, Any], message_type: str):
         session_id = payload.get("sessionId")

@@ -15,7 +15,8 @@ services:
     buildCommand: bash build.sh
     # WebSocket calls require ASGI (Daphne). Gunicorn WSGI cannot serve /ws/calls/.
     startCommand: bash start.sh
-    healthCheckPath: /api/init
+    # Lightweight probe — /api/init hits the DB and is too slow for cold-start health checks.
+    healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.0"

@@ -10,6 +10,7 @@ import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
 import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
+import { callPanelStatus, isCallLive, mergeLiveSession } from "../lib/liveSession";
 import { interpreterSupportsLanguagePair } from "../lib/interpreterMatching";
 
 // Helper for playBeepTone
@@ -230,7 +231,7 @@ export default function ClientDashboard({
       .filter(
         (session) =>
           session.clientId === clientId &&
-          session.status === "active" &&
+          LIVE_CLIENT_STATUSES.includes(session.status) &&
           session.id !== dismissedSessionId
       )
       .sort((a, b) => {
@@ -249,7 +250,9 @@ export default function ClientDashboard({
     return callSocket.subscribe((message) => {
       if (message.type === "call.created" || message.type === "call.ringing" || message.type === "call.accepted") {
         setDismissedSessionId(null);
-        setActiveSession(message.session);
+        setActiveSession((prev) =>
+          mergeLiveSession(prev, message.type === "call.accepted" ? { ...message.session, status: "active" } : message.session)
+        );
         setIsSubmitting(false);
         onActionComplete();
       } else if (message.type === "call.ended") {
@@ -291,7 +294,7 @@ export default function ClientDashboard({
   // Watch sessions for active patient context
   useEffect(() => {
     if (liveClientSession) {
-      setActiveSession(liveClientSession);
+      setActiveSession((prev) => mergeLiveSession(prev, liveClientSession));
       return;
     }
 
@@ -301,7 +304,7 @@ export default function ClientDashboard({
       if (!match && LIVE_CLIENT_STATUSES.includes(prev.status)) return prev;
       if (!match) return null;
       if (["cancelled", "completed", "missed"].includes(match.status)) return null;
-      if (LIVE_CLIENT_STATUSES.includes(match.status)) return match;
+      if (LIVE_CLIENT_STATUSES.includes(match.status)) return mergeLiveSession(prev, match);
       return prev;
     });
   }, [sessions, dismissedSessionId, liveClientSession]);
@@ -994,9 +997,9 @@ export default function ClientDashboard({
                       sessionId={activeSession.id}
                       role="client"
                       isCaller
-                      enabled={activeSession.status === "active"}
+                      enabled={isCallLive(activeSession)}
                       initialStream={callMediaStream}
-                      status={activeSession.status}
+                      status={callPanelStatus(activeSession)}
                       peerName={activeSession.interpreterName || "Interpreter"}
                       languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
                       localLabel="You: Clinic Desk"

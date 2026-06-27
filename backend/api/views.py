@@ -136,6 +136,13 @@ class AuthLoginView(APIView):
         return Response({"success": True, "user": serialize_user(profile)})
 
 
+class HealthView(APIView):
+    """Lightweight liveness probe for Render (no DB queries)."""
+
+    def get(self, request):
+        return Response({"status": "ok"})
+
+
 class InitView(APIView):
     def get(self, request):
         from api.services.call_state import cleanup_stale_sessions
@@ -361,64 +368,17 @@ class CallDialView(APIView):
 
 class SessionAcceptView(APIView):
     def post(self, request, session_id):
-        try:
-            session = Session.objects.prefetch_related("chat_messages").select_related(
-                "interpreter__profile"
-            ).get(pk=session_id)
-        except Session.DoesNotExist:
-            return Response({"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        if session.status != "incoming":
-            return Response(
-                {"error": "This session is no longer available to accept."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         interpreter_id = request.data.get("interpreterId")
         interpreter_name = request.data.get("interpreterName")
-        profile = get_profile_by_external_id(interpreter_id) if interpreter_id else None
+        from api.services import call_state
+        from api.ws_notify import notify_call_accepted
 
-        if not profile or profile.role != "interpreter":
-            return Response(
-                {"error": "A valid interpreter account is required to accept this call."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        result = call_state.accept_call(session_id, interpreter_id, interpreter_name)
+        if not result.ok:
+            return Response({"error": result.error}, status=result.status)
 
-        if not can_interpreter_accept_session(session, profile):
-            return Response(
-                {
-                    "error": (
-                        f"You are not registered for the {session.language_from} ⇆ "
-                        f"{session.language_to} language pair."
-                    )
-                },
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        session.interpreter = profile.user
-        session.interpreter_name = interpreter_name or profile.user.get_full_name()
-        session.status = "active"
-        session.save()
-        Session.objects.filter(
-            client=session.client,
-            status__in=LIVE_CLIENT_SESSION_STATUSES,
-        ).exclude(pk=session.pk).update(status="cancelled")
-
-        ChatMessage.objects.create(
-            session=session,
-            sender_role="system",
-            sender_name="System",
-            text=f"Interpreter {session.interpreter_name} accepted the session. Video line open.",
-        )
-
-        log_action(
-            f"Session {session_id} accepted by interpreter {session.interpreter_name}",
-            "interpreter",
-            session.interpreter_name,
-            "success",
-        )
-
-        return Response({"success": True, "session": serialize_session(session)})
+        notify_call_accepted(result.session, result.client_id, result.target_interpreter_id)
+        return Response({"success": True, "session": result.session})
 
 
 class SessionRejectView(APIView):

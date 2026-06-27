@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   Shield, Users, Activity, LogOut, LayoutDashboard, Globe, 
   Wallet, HelpCircle, Bell, RefreshCw, Layers, CheckCircle2, UserCheck,
@@ -52,6 +52,9 @@ export default function App() {
   const [activeContractId, setActiveContractId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [aiEngineStatus, setAiEngineStatus] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"connected" | "reconnecting" | "offline">("connected");
+  const pollFailuresRef = useRef(0);
+  const lastPollWarnRef = useRef(0);
 
   // Sync activeRole with authenticated user's role
   useEffect(() => {
@@ -60,8 +63,36 @@ export default function App() {
     }
   }, [authenticatedUser]);
 
-  // Auto update poller
-  const fetchState = async () => {
+  const isTransientFetchError = (err: unknown) => {
+    if (!(err instanceof Error)) return false;
+    const msg = err.message.toLowerCase();
+    return (
+      msg.includes("fetch") ||
+      msg.includes("network") ||
+      msg.includes("load failed") ||
+      msg.includes("failed to fetch") ||
+      msg.includes("network_changed") ||
+      msg.includes("internet_disconnected")
+    );
+  };
+
+  const logPollIssue = (message: string) => {
+    const now = Date.now();
+    if (now - lastPollWarnRef.current < 30000) return;
+    lastPollWarnRef.current = now;
+    console.warn("Poller sync:", message);
+  };
+
+  // Auto update poller (backs off when the network or server is temporarily unavailable)
+  const fetchState = useCallback(async () => {
+    if (!navigator.onLine) {
+      pollFailuresRef.current += 1;
+      setSyncStatus("offline");
+      logPollIssue("device is offline — will retry when connection returns");
+      setLoading(false);
+      return;
+    }
+
     try {
       const clientId =
         authenticatedUser?.role === "client" ? authenticatedUser.id : undefined;
@@ -82,32 +113,55 @@ export default function App() {
         setContractsList(data.contractsList || []);
         setActiveContractId(data.activeContractId || "");
         setAiEngineStatus(data.aiAvailable || false);
+        pollFailuresRef.current = 0;
+        setSyncStatus("connected");
       } else {
-        console.warn("Poller sync: server returned non-JSON response or is starting up.");
+        pollFailuresRef.current += 1;
+        setSyncStatus("reconnecting");
+        logPollIssue("server is starting up or returned a non-JSON response");
       }
-    } catch (err: any) {
-      const isJsonError = err instanceof SyntaxError || (err.message && err.message.includes("is not valid JSON"));
-      const isNetworkError = err.message && (
-        err.message.toLowerCase().includes("fetch") || 
-        err.message.toLowerCase().includes("network") || 
-        err.message.toLowerCase().includes("load failed") ||
-        err.message.toLowerCase().includes("failed to fetch")
-      );
-      if (isJsonError || isNetworkError) {
-        console.warn("Poller sync: temporary network/server connection issue:", err.message);
+    } catch (err: unknown) {
+      pollFailuresRef.current += 1;
+      setSyncStatus(navigator.onLine ? "reconnecting" : "offline");
+      const isJsonError = err instanceof SyntaxError;
+      if (isJsonError || isTransientFetchError(err)) {
+        const detail = err instanceof Error ? err.message : "connection failed";
+        logPollIssue(`temporary connection issue (${detail})`);
       } else {
         console.error("Poller syncing failed:", err);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }, [authenticatedUser?.id, authenticatedUser?.role]);
 
   useEffect(() => {
     fetchState();
-    const interval = setInterval(fetchState, 2000);
-    return () => clearInterval(interval);
-  }, [authenticatedUser?.id]);
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const failures = pollFailuresRef.current;
+      const delay = failures === 0 ? 3000 : Math.min(15000, 3000 * 2 ** Math.min(failures - 1, 3));
+      timer = setTimeout(async () => {
+        await fetchState();
+        schedule();
+      }, delay);
+    };
+    schedule();
+
+    const onOnline = () => {
+      pollFailuresRef.current = 0;
+      fetchState();
+    };
+    const onOffline = () => setSyncStatus("offline");
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, [fetchState]);
 
   const handleLoginSuccess = (user: User, workspaceRole: User["role"]) => {
     const role = user.role === workspaceRole ? workspaceRole : user.role;
@@ -272,6 +326,18 @@ export default function App() {
         </div>
 
       </header>
+
+      {syncStatus !== "connected" && (
+        <div className={`px-4 py-2 text-center text-xs font-mono border-b ${
+          syncStatus === "offline"
+            ? "bg-amber-500/10 text-amber-600 border-amber-500/20"
+            : "bg-blue-500/10 text-blue-600 border-blue-500/20"
+        }`}>
+          {syncStatus === "offline"
+            ? "No internet connection — live updates paused until you're back online."
+            : "Reconnecting to server… live data will resume automatically."}
+        </div>
+      )}
 
       {/* Main Core Container */}
       <div className="flex-1 flex max-w-[1700px] w-full mx-auto">
