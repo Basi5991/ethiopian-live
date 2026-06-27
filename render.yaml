@@ -14,7 +14,7 @@ services:
     plan: free
     buildCommand: bash build.sh
     # WebSocket calls require ASGI (Daphne). Gunicorn WSGI cannot serve /ws/calls/.
-    startCommand: cd backend && daphne -b 0.0.0.0 -p $PORT terjuman.asgi:application
+    startCommand: bash start.sh
     healthCheckPath: /api/init
     envVars:
       - key: PYTHON_VERSION
