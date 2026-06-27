@@ -14,6 +14,7 @@ import {
   formatLanguageProficiencies,
   findIncomingSessionForInterpreter,
   isDirectDialSession,
+  isIncomingCallForInterpreter,
 } from "../lib/interpreterMatching";
 
 let incomingRingAudioContext: AudioContext | null = null;
@@ -111,11 +112,19 @@ export default function InterpreterDashboard({
     }
   })();
 
-  // Current logged in interpreter
-  const currentUser = savedUser?.role === "interpreter" ? savedUser : null;
-  const currentInterpreter = currentUser || users.find(u => u.role === "interpreter") || users[2];
+  // Current logged in interpreter — hydrate from /api/init so languages are always present.
+  const currentInterpreter = React.useMemo(() => {
+    if (savedUser?.role === "interpreter") {
+      const hydrated = users.find((u) => u.id === savedUser.id);
+      return hydrated ? { ...savedUser, ...hydrated } : savedUser;
+    }
+    return users.find((u) => u.role === "interpreter") || users[2];
+  }, [savedUser, users]);
   const interpreterId = currentInterpreter?.id || "usr_int1";
-  const interpreterLanguages = currentInterpreter?.languages ?? [];
+  const interpreterLanguages =
+    currentInterpreter?.languages ??
+    currentInterpreter?.languageProficiencies?.map((entry) => entry.language) ??
+    [];
   const callSocket = React.useMemo(() => getCallSocket(interpreterId, "interpreter"), [interpreterId]);
 
   // Dashboard Slider Section Switcher
@@ -217,6 +226,11 @@ export default function InterpreterDashboard({
       if (message.type === "call.ringing") {
         if (endedSessionIds.current.has(message.session.id)) return;
         if (
+          !isIncomingCallForInterpreter(message.session, interpreterId, interpreterLanguages)
+        ) {
+          return;
+        }
+        if (
           onlineStatusRef.current === "active" &&
           !activeSessionRef.current &&
           !callLockSessionIdRef.current &&
@@ -255,7 +269,7 @@ export default function InterpreterDashboard({
         setCallLockSessionId(null);
       }
     });
-  }, [callSocket, interpreterId, markSessionEnded]);
+  }, [callSocket, interpreterId, interpreterLanguages, markSessionEnded]);
 
   // Ring for any language-qualified incoming call (broadcast or direct dial)
   useEffect(() => {

@@ -81,9 +81,14 @@ class CallConsumer(JsonWebsocketConsumer):
             return
 
         ringing_payload = {"type": "call.ringing", "session": result.session}
-        for interpreter_id in result.interpreter_ids:
-            self._send_user(interpreter_id, ringing_payload)
-        if not result.interpreter_ids:
+        if result.target_interpreter_id:
+            self._send_user(result.target_interpreter_id, ringing_payload)
+        elif result.interpreter_ids:
+            for interpreter_id in result.interpreter_ids:
+                self._send_user(interpreter_id, ringing_payload)
+            # Also notify every connected interpreter desk; UI filters by language pair.
+            self._send_group("role_interpreters", ringing_payload)
+        else:
             self._send_user(result.client_id, {"type": "call.error", "error": "No eligible interpreter is available."})
 
     def _handle_call_accept(self, payload: dict[str, Any]):

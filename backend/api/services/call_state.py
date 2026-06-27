@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
+from django.utils import timezone
 
 from api.models import ChatMessage, Profile, Session, Transaction, WebRTCSignal
 from api.services.interpreter_matching import can_interpreter_accept_session, interpreter_supports_language_pair
@@ -23,6 +25,31 @@ from api.utils import (
 
 LIVE_CLIENT_SESSION_STATUSES = ("incoming", "active", "pending")
 TERMINAL_SESSION_STATUSES = ("cancelled", "completed", "missed")
+STALE_INCOMING_SECONDS = 120
+STALE_ACTIVE_SECONDS = 1800
+
+
+def cleanup_stale_sessions(client_profile: Profile | None = None) -> int:
+    """Drop abandoned call rows that block new dispatch on production."""
+    now = timezone.now()
+    incoming_cutoff = now - timedelta(seconds=STALE_INCOMING_SECONDS)
+    active_cutoff = now - timedelta(seconds=STALE_ACTIVE_SECONDS)
+    cancelled = 0
+
+    cancelled += Session.objects.filter(status="incoming", created_at__lt=incoming_cutoff).update(status="cancelled")
+    cancelled += Session.objects.filter(status="pending", created_at__lt=incoming_cutoff).update(status="cancelled")
+    cancelled += Session.objects.filter(status="active", created_at__lt=active_cutoff).update(status="completed")
+
+    if client_profile:
+        cancelled += (
+            Session.objects.filter(
+                client=client_profile.user,
+                status__in=LIVE_CLIENT_SESSION_STATUSES,
+                created_at__lt=incoming_cutoff,
+            ).update(status="cancelled")
+        )
+
+    return cancelled
 
 
 @dataclass
@@ -48,8 +75,13 @@ def _live_client_session(client_profile: Profile) -> Session | None:
 
 
 def _active_interpreter_session(interpreter_profile: Profile) -> Session | None:
+    active_cutoff = timezone.now() - timedelta(seconds=STALE_ACTIVE_SECONDS)
     return (
-        Session.objects.filter(interpreter=interpreter_profile.user, status="active")
+        Session.objects.filter(
+            interpreter=interpreter_profile.user,
+            status="active",
+            created_at__gte=active_cutoff,
+        )
         .prefetch_related("chat_messages")
         .select_related("client__profile", "interpreter__profile")
         .order_by("-created_at")
@@ -72,6 +104,8 @@ def request_call(data: dict[str, Any]) -> CallStateResult:
     client_profile, client_error = resolve_client_profile(client_id)
     if client_error or not client_profile:
         return CallStateResult(False, error=client_error or "No client profile configured.", status=400)
+
+    cleanup_stale_sessions(client_profile)
 
     contract = get_contract_for_client(client_profile)
     if not contract or contract.status == "expired":

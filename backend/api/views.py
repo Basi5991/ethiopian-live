@@ -138,6 +138,10 @@ class AuthLoginView(APIView):
 
 class InitView(APIView):
     def get(self, request):
+        from api.services.call_state import cleanup_stale_sessions
+
+        cleanup_stale_sessions()
+
         client_id = request.query_params.get("clientId")
         contract = None
         if client_id:
