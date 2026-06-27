@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Calendar, Check, Power, Briefcase, FileText, AlertTriangle, 
@@ -8,9 +8,10 @@ import {
 import { User, Session, Transaction, InterpreterAvailability, Slot } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
+import { getCallSocket } from "../lib/callSocket";
 import {
-  findIncomingSessionForInterpreter,
   formatLanguageProficiencies,
+  findIncomingSessionForInterpreter,
   isDirectDialSession,
 } from "../lib/interpreterMatching";
 
@@ -93,6 +94,7 @@ export default function InterpreterDashboard({
   const interpreterId = currentUser?.id || "usr_int1";
   const currentInterpreter = users.find(u => u.id === interpreterId) || users.find(u => u.role === "interpreter") || users[2];
   const interpreterLanguages = currentUser?.languages ?? currentInterpreter?.languages ?? [];
+  const callSocket = React.useMemo(() => getCallSocket(interpreterId, "interpreter"), [interpreterId]);
 
   // Dashboard Slider Section Switcher
   const [dashboardSlide, setDashboardSlide] = useState<"dispatch" | "earnings">("dispatch");
@@ -126,18 +128,70 @@ export default function InterpreterDashboard({
   const [countdown, setCountdown] = useState(60);
   const [isAccepting, setIsAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState("");
+  const acceptedSessionIds = useRef<Set<string>>(new Set());
+  const ringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [callLockSessionId, setCallLockSessionId] = useState<string | null>(null);
+  const stopIncomingRing = () => {
+    if (ringIntervalRef.current) {
+      clearInterval(ringIntervalRef.current);
+      ringIntervalRef.current = null;
+    }
+  };
+  const visibleIncomingRequest =
+    incomingRequest &&
+    !isAccepting &&
+    !activeSession &&
+    !callLockSessionId &&
+    !acceptedSessionIds.current.has(incomingRequest.id)
+      ? incomingRequest
+      : null;
+
+  useEffect(() => {
+    return callSocket.subscribe((message) => {
+      if (message.type === "call.ringing") {
+        if (onlineStatus === "active" && !activeSession && !callLockSessionId && !acceptedSessionIds.current.has(message.session.id)) {
+          setIncomingRequest(message.session);
+          setDismissedSessionId(null);
+        }
+      } else if (message.type === "call.accepted") {
+        const assignedInterpreterId = message.session.interpreterId;
+        if (assignedInterpreterId === interpreterId) {
+          acceptedSessionIds.current.add(message.session.id);
+          setCallLockSessionId(message.session.id);
+          stopIncomingRing();
+          setIncomingRequest(null);
+          setDismissedSessionId(null);
+          setActiveSession(message.session);
+          onActionComplete();
+        } else if (incomingRequest?.id === message.session.id) {
+          setIncomingRequest(null);
+          stopIncomingRing();
+        }
+        setIsAccepting(false);
+      } else if (message.type === "call.ended") {
+        if (activeSession?.id === message.session.id || incomingRequest?.id === message.session.id) {
+          setDismissedSessionId(message.session.id);
+          setIncomingRequest(null);
+          endSessionLocally();
+          onActionComplete();
+        }
+      } else if (message.type === "call.error") {
+        setAcceptError(message.error);
+        setIsAccepting(false);
+        setCallLockSessionId(null);
+      }
+    });
+  }, [callSocket, activeSession, incomingRequest, callLockSessionId, interpreterId, onlineStatus, onActionComplete]);
 
   // Ring for any language-qualified incoming call (broadcast or direct dial)
   useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval> | undefined;
-    if (incomingRequest && onlineStatus === "active") {
+    stopIncomingRing();
+    if (visibleIncomingRequest && onlineStatus === "active") {
       playIncomingCallBeep();
-      intervalId = setInterval(playIncomingCallBeep, 3500);
+      ringIntervalRef.current = setInterval(playIncomingCallBeep, 3500);
     }
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [incomingRequest?.id, onlineStatus]);
+    return stopIncomingRing;
+  }, [visibleIncomingRequest?.id, onlineStatus]);
 
   const clearCallMedia = () => {
     setCallMediaStream((prev) => {
@@ -148,19 +202,23 @@ export default function InterpreterDashboard({
 
   const endSessionLocally = () => {
     setActiveSession(null);
+    setCallLockSessionId(null);
+    stopIncomingRing();
     clearCallMedia();
   };
 
   // Track state changes & live triggers
   useEffect(() => {
+    const currentActive = sessions.find(
+      (s) => s.interpreterId === interpreterId && s.status === "active" && s.id !== dismissedSessionId
+    );
+
     // 1. Locate active session — keep optimistic accept until server confirms or call ends
     setActiveSession((prev) => {
       if (prev?.id === dismissedSessionId) return null;
 
-      const currentActive = sessions.find(
-        (s) => s.interpreterId === interpreterId && s.status === "active" && s.id !== dismissedSessionId
-      );
       if (currentActive) {
+        setCallLockSessionId(currentActive.id);
         if (prev?.id === currentActive.id && prev.status === currentActive.status) return prev;
         return currentActive;
       }
@@ -168,7 +226,11 @@ export default function InterpreterDashboard({
       if (prev?.status === "active") {
         const match = sessions.find((s) => s.id === prev.id);
         if (!match) return prev;
-        if (["cancelled", "completed", "missed"].includes(match.status)) return null;
+        if (["cancelled", "completed", "missed"].includes(match.status)) {
+          setCallLockSessionId(null);
+          acceptedSessionIds.current.delete(prev.id);
+          return null;
+        }
         if (match.status === "active") return match;
         return prev;
       }
@@ -176,8 +238,7 @@ export default function InterpreterDashboard({
       return null;
     });
 
-    // 2. Incoming calls — language-matched broadcast or direct dial only
-    const incomingCall = findIncomingSessionForInterpreter(
+    const nextIncoming = findIncomingSessionForInterpreter(
       sessions,
       interpreterId,
       interpreterLanguages,
@@ -185,19 +246,18 @@ export default function InterpreterDashboard({
     );
 
     setIncomingRequest((prev) => {
-      if (isAccepting) return prev;
-      const activeId = activeSession?.status === "active" ? activeSession.id : null;
-      if (activeId && incomingCall?.id === activeId) return null;
-      if (activeSession?.status === "active") return null;
-      if (incomingCall && onlineStatus === "active") return incomingCall;
-      return null;
+      if (prev && acceptedSessionIds.current.has(prev.id)) return null;
+      if (isAccepting) return null;
+      if (callLockSessionId) return null;
+      if (currentActive || activeSession?.status === "active") return null;
+      return prev || nextIncoming || null;
     });
-  }, [sessions, onlineStatus, interpreterId, interpreterLanguages, dismissedSessionId, activeSession, isAccepting]);
+  }, [sessions, onlineStatus, interpreterId, interpreterLanguages, dismissedSessionId, activeSession, isAccepting, callLockSessionId]);
 
   // Countdown simulation for incoming matching alert popup
   useEffect(() => {
     let interval: any;
-    if (incomingRequest) {
+    if (visibleIncomingRequest) {
       interval = setInterval(() => {
         setCountdown(prev => {
           if (prev <= 1) {
@@ -210,7 +270,7 @@ export default function InterpreterDashboard({
       setCountdown(60);
     }
     return () => clearInterval(interval);
-  }, [incomingRequest]);
+  }, [visibleIncomingRequest]);
 
   // Status updater
   const handleStatusUpdate = async (next: "active" | "offline" | "busy") => {
@@ -292,6 +352,9 @@ export default function InterpreterDashboard({
     setAcceptError("");
 
     const callSnapshot = incomingRequest?.id === sessionId ? incomingRequest : null;
+    acceptedSessionIds.current.add(sessionId);
+    setCallLockSessionId(sessionId);
+    stopIncomingRing();
     setIncomingRequest(null);
     if (callSnapshot) {
       setDismissedSessionId(null);
@@ -305,44 +368,19 @@ export default function InterpreterDashboard({
 
     let stream: MediaStream | null = null;
     try {
-      const [res, mediaStream] = await Promise.all([
-        fetch(`/api/sessions/${sessionId}/accept`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            interpreterId,
-            interpreterName: currentInterpreter?.name,
-          }),
-        }),
-        acquireCallMedia({ preferVideo: true }).catch(() => null),
-      ]);
-
-      stream = mediaStream;
+      stream = await acquireCallMedia({ preferVideo: true }).catch(() => null);
       if (stream) {
         setCallMediaStream(stream);
       }
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.session) {
-          setDismissedSessionId(null);
-          setActiveSession(data.session);
-        }
-        onActionComplete();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setAcceptError(errData.error || "Could not accept this call.");
-        setActiveSession(null);
-        if (stream) {
-          stream.getTracks().forEach((t) => t.stop());
-        }
-        setCallMediaStream(null);
-        if (callSnapshot) {
-          setIncomingRequest(callSnapshot);
-        }
-      }
+      callSocket.send("call.accept", {
+        sessionId,
+        interpreterId,
+        interpreterName: currentInterpreter?.name,
+      });
     } catch (err) {
       setActiveSession(null);
+      setCallLockSessionId(null);
+      acceptedSessionIds.current.delete(sessionId);
       if (stream) {
         stream.getTracks().forEach((t) => t.stop());
       }
@@ -351,19 +389,18 @@ export default function InterpreterDashboard({
         setIncomingRequest(callSnapshot);
       }
       console.error(err);
-    } finally {
-      setIsAccepting(false);
     }
   };
 
   // Reject and close matching popup
   const handleDeclineRequest = async (sessionId: string) => {
     try {
-      await fetch(`/api/sessions/${sessionId}/reject`, { method: "POST" });
+      callSocket.send("call.decline", { sessionId });
     } catch (e) {
       console.error(e);
     }
     setIncomingRequest(null);
+    stopIncomingRing();
     onActionComplete();
   };
 
@@ -527,8 +564,8 @@ export default function InterpreterDashboard({
       </div>
 
       {/* Global incoming call alert — visible on any tab */}
-      {incomingRequest && !activeSession && (
-        isDirectDialSession(incomingRequest, interpreterId) ? (
+      {visibleIncomingRequest && (
+        isDirectDialSession(visibleIncomingRequest, interpreterId) ? (
           <div className="col-span-12 p-6 rounded-2xl border-2 border-emerald-500 bg-emerald-950/25 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-2xl shadow-emerald-500/5">
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 rounded-full bg-emerald-500/10 border-2 border-emerald-500/30 flex items-center justify-center animate-bounce shrink-0 text-emerald-400">
@@ -539,10 +576,10 @@ export default function InterpreterDashboard({
                   Incoming WebRTC Call
                 </span>
                 <h4 className="text-base font-extrabold text-white">
-                  {incomingRequest.clientName}
+                  {visibleIncomingRequest.clientName}
                 </h4>
                 <p className="text-xs text-slate-300">
-                  {incomingRequest.languageFrom} ⇆ {incomingRequest.languageTo} • {incomingRequest.serviceType}
+                  {visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo} • {visibleIncomingRequest.serviceType}
                 </p>
               </div>
             </div>
@@ -550,7 +587,7 @@ export default function InterpreterDashboard({
               <button
                 type="button"
                 disabled={isAccepting}
-                onClick={() => void handleAcceptRequest(incomingRequest.id)}
+                onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
                 className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 font-black text-xs uppercase rounded-xl text-white flex items-center gap-2"
               >
                 <Phone className="w-4 h-4" /> {isAccepting ? "Connecting…" : "Accept Call"}
@@ -558,7 +595,7 @@ export default function InterpreterDashboard({
               <button
                 type="button"
                 disabled={isAccepting}
-                onClick={() => void handleDeclineRequest(incomingRequest.id)}
+                onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
                 className="px-4 py-3 text-red-400 hover:bg-red-600 hover:text-white border border-red-500/25 font-bold text-xs uppercase rounded-xl"
               >
                 Decline
@@ -569,7 +606,7 @@ export default function InterpreterDashboard({
           <div className="col-span-12 p-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div className="space-y-1">
               <span className="text-[10px] font-bold uppercase text-amber-500">Broadcast call available</span>
-              <p className="text-sm font-bold">{incomingRequest.languageFrom} ⇆ {incomingRequest.languageTo}</p>
+              <p className="text-sm font-bold">{visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}</p>
               <p className="text-[10px] text-amber-300/80">
                 Matched to your languages:{" "}
                 {formatLanguageProficiencies(
@@ -583,7 +620,7 @@ export default function InterpreterDashboard({
               <button
                 type="button"
                 disabled={isAccepting}
-                onClick={() => void handleAcceptRequest(incomingRequest.id)}
+                onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
                 className="px-4 py-2 bg-emerald-600 disabled:opacity-50 font-bold text-xs uppercase rounded-lg text-white"
               >
                 {isAccepting ? "Connecting…" : "Accept"}
@@ -591,7 +628,7 @@ export default function InterpreterDashboard({
               <button
                 type="button"
                 disabled={isAccepting}
-                onClick={() => void handleDeclineRequest(incomingRequest.id)}
+                onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
                 className="px-3 py-2 bg-white/5 text-xs text-slate-400 rounded-lg"
               >
                 Pass
@@ -665,9 +702,12 @@ export default function InterpreterDashboard({
                 const sessionId = activeSession.id;
                 setDismissedSessionId(sessionId);
                 setActiveSession(null);
+                setCallLockSessionId(null);
+                acceptedSessionIds.current.delete(sessionId);
+                stopIncomingRing();
                 clearCallMedia();
                 try {
-                  await fetch(`/api/sessions/${sessionId}/reject`, { method: "POST" });
+                  callSocket.send("call.end", { sessionId });
                 } catch (e) {
                   console.error(e);
                 }
@@ -675,6 +715,8 @@ export default function InterpreterDashboard({
               }}
               onPeerHangup={(sessionId) => {
                 setDismissedSessionId(sessionId);
+                setCallLockSessionId(null);
+                acceptedSessionIds.current.delete(sessionId);
                 endSessionLocally();
               }}
             />
@@ -699,8 +741,8 @@ export default function InterpreterDashboard({
           <div className="space-y-6">
             
             {/* Live Incoming unclaimed Alert Popup Banner */}
-            {incomingRequest && (
-              isDirectDialSession(incomingRequest, interpreterId) ? (
+            {visibleIncomingRequest && (
+              isDirectDialSession(visibleIncomingRequest, interpreterId) ? (
                 // Direct VIP calling flashbox with high visual rhythm
                 <div className="p-6 rounded-2xl border-2 border-emerald-500 bg-emerald-950/25 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 animate-scale-up shadow-2xl shadow-emerald-500/5">
                   <div className="flex items-center gap-4">
@@ -712,13 +754,13 @@ export default function InterpreterDashboard({
                         📞 Premium Speed Dial Line
                       </span>
                       <h4 className="text-base font-extrabold text-white uppercase tracking-tight">
-                        Direct Caller: {incomingRequest.clientName}
+                        Direct Caller: {visibleIncomingRequest.clientName}
                       </h4>
                       <p className="text-xs text-slate-300">
-                        Language Pair: <span className="font-bold text-slate-100">{incomingRequest.languageFrom} ⇆ {incomingRequest.languageTo}</span> • Domain: <span className="capitalize">{incomingRequest.serviceType} Case</span>
+                        Language Pair: <span className="font-bold text-slate-100">{visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}</span> • Domain: <span className="capitalize">{visibleIncomingRequest.serviceType} Case</span>
                       </p>
                       <div className="pt-0.5 flex items-center gap-2 text-[10px] text-emerald-400 font-mono font-bold uppercase tracking-wider">
-                        <span>Fee Allocated: {(incomingRequest.cost * 0.85).toFixed(2)} ETB</span>
+                        <span>Fee Allocated: {(visibleIncomingRequest.cost * 0.85).toFixed(2)} ETB</span>
                         <span>•</span>
                         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" /> Connection Standby</span>
                       </div>
@@ -729,7 +771,7 @@ export default function InterpreterDashboard({
                     <button
                       type="button"
                       disabled={isAccepting}
-                      onClick={() => void handleAcceptRequest(incomingRequest.id)}
+                      onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
                       className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 font-black text-xs uppercase tracking-wider rounded-xl text-white flex items-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer active:scale-95 transition-transform duration-100"
                     >
                       <Phone className="w-4 h-4" /> {isAccepting ? "Connecting…" : "Connect Line"}
@@ -737,7 +779,7 @@ export default function InterpreterDashboard({
                     <button
                       type="button"
                       disabled={isAccepting}
-                      onClick={() => void handleDeclineRequest(incomingRequest.id)}
+                      onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
                       className="px-4 py-3 bg-red-650/10 text-red-400 hover:text-white hover:bg-red-600 border border-red-500/25 hover:border-red-500 font-extrabold text-xs uppercase rounded-xl cursor-pointer active:scale-95 transition-transform duration-100"
                     >
                       Decline
@@ -752,10 +794,10 @@ export default function InterpreterDashboard({
                       ⚠️ Immediate matching broadcast available
                     </span>
                     <p className="text-xs font-bold text-slate-200 mt-1">
-                      Route requested: {incomingRequest.languageFrom} ⇆ {incomingRequest.languageTo}
+                      Route requested: {visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}
                     </p>
                     <p className="text-[11px] text-slate-500">
-                      Category: <span className="capitalize">{incomingRequest.serviceType}</span> • Fee: {(incomingRequest.cost * 0.85).toFixed(2)} ETB commission
+                      Category: <span className="capitalize">{visibleIncomingRequest.serviceType}</span> • Fee: {(visibleIncomingRequest.cost * 0.85).toFixed(2)} ETB commission
                     </p>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
@@ -765,7 +807,7 @@ export default function InterpreterDashboard({
                     <button
                       type="button"
                       disabled={isAccepting}
-                      onClick={() => void handleAcceptRequest(incomingRequest.id)}
+                      onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 font-bold text-xs uppercase tracking-wider rounded-lg text-white"
                     >
                       {isAccepting ? "Connecting…" : "Accept Room Target"}
@@ -773,7 +815,7 @@ export default function InterpreterDashboard({
                     <button
                       type="button"
                       disabled={isAccepting}
-                      onClick={() => void handleDeclineRequest(incomingRequest.id)}
+                      onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
                       className="px-3 py-2 bg-white/5 hover:bg-white/10 text-xs text-slate-400 rounded-lg"
                     >
                       Pass

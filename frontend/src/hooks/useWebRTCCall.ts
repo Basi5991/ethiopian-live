@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getCallSocket, getCurrentUserIdForSocket } from "../lib/callSocket";
 
 export type WebRTCRole = "client" | "interpreter";
 
@@ -16,6 +17,23 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: "stun:stun1.l.google.com:19302" },
   ],
 };
+
+function hasSessionDescription(payload: unknown): payload is RTCSessionDescriptionInit {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "type" in payload &&
+      "sdp" in payload
+  );
+}
+
+function hasIceCandidate(payload: unknown): payload is RTCIceCandidateInit {
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "candidate" in payload
+  );
+}
 
 /** Acquire video and audio separately — works when a combined constraint fails (e.g. busy camera). */
 export async function acquireCallMedia(options: { preferVideo?: boolean } = {}): Promise<MediaStream> {
@@ -111,8 +129,10 @@ export function useWebRTCCall({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const processedIdsRef = useRef<Set<string>>(new Set());
+  const pendingSignalsRef = useRef<WebRTCSignalMessage[]>([]);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const signalSocketRef = useRef<ReturnType<typeof getCallSocket> | null>(null);
   const mountGenRef = useRef(0);
   const ownsLocalStreamRef = useRef(false);
   const renegotiatingRef = useRef(false);
@@ -168,12 +188,12 @@ export function useWebRTCCall({
   const postSignal = useCallback(async (signalType: WebRTCSignalMessage["signalType"], payload: unknown) => {
     const sid = sessionIdRef.current;
     if (!sid) return false;
-    const res = await fetch(`/api/webrtc/${sid}/signal`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ senderRole: roleRef.current, signalType, payload }),
-    });
-    return res.ok;
+    const socket =
+      signalSocketRef.current ||
+      getCallSocket(getCurrentUserIdForSocket(roleRef.current), roleRef.current);
+    signalSocketRef.current = socket;
+    socket.send(`webrtc.${signalType}`, { sessionId: sid, payload: (payload as Record<string, unknown>) || {} });
+    return true;
   }, []);
 
   const flushPendingIce = useCallback(async (pc: RTCPeerConnection) => {
@@ -188,6 +208,19 @@ export function useWebRTCCall({
       }
     }
   }, []);
+
+  const acceptOfferAndAnswer = useCallback(
+    async (pc: RTCPeerConnection, offer: RTCSessionDescriptionInit) => {
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      await flushPendingIce(pc);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      if (pc.localDescription) {
+        await postSignal("answer", pc.localDescription.toJSON());
+      }
+    },
+    [flushPendingIce, postSignal]
+  );
 
   const attachRemoteTrack = useCallback(
     (track: MediaStreamTrack) => {
@@ -210,9 +243,11 @@ export function useWebRTCCall({
       if (renegotiatingRef.current || isCallerRef.current) return;
       renegotiatingRef.current = true;
       try {
-        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+        const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        await postSignal("offer", offer);
+        if (pc.localDescription) {
+          await postSignal("offer", pc.localDescription.toJSON());
+        }
       } catch {
         /* retry on next poll cycle */
       } finally {
@@ -243,6 +278,7 @@ export function useWebRTCCall({
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     pendingIceRef.current = [];
+    pendingSignalsRef.current = [];
     processedIdsRef.current.clear();
     setLocalReady(false);
     setRemoteReady(false);
@@ -265,27 +301,23 @@ export function useWebRTCCall({
       if (!pc) return;
 
       if (signal.signalType === "offer") {
+        if (!hasSessionDescription(signal.payload)) return;
+
         if (pc.signalingState === "stable") {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload as RTCSessionDescriptionInit));
-          await flushPendingIce(pc);
-          const answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-          await pc.setLocalDescription(answer);
-          await postSignal("answer", answer);
+          await acceptOfferAndAnswer(pc, signal.payload);
         } else if (pc.signalingState === "have-local-offer" && isCallerRef.current) {
           // Roll back our offer and accept the remote one (glare handling)
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload as RTCSessionDescriptionInit));
-          await flushPendingIce(pc);
-          const answer = await pc.createAnswer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
-          await pc.setLocalDescription(answer);
-          await postSignal("answer", answer);
+          await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
+          await acceptOfferAndAnswer(pc, signal.payload);
         }
       } else if (signal.signalType === "answer" && isCallerRef.current) {
-        if (pc.signalingState === "have-local-offer") {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload as RTCSessionDescriptionInit));
+        if (pc.signalingState === "have-local-offer" && hasSessionDescription(signal.payload)) {
+          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
           await flushPendingIce(pc);
         }
       } else if (signal.signalType === "ice") {
-        const candidate = signal.payload as RTCIceCandidateInit;
+        if (!hasIceCandidate(signal.payload)) return;
+        const candidate = signal.payload;
         if (!pc.remoteDescription) {
           pendingIceRef.current.push(candidate);
           return;
@@ -304,37 +336,8 @@ export function useWebRTCCall({
         onPeerHangupRef.current?.(sid || "");
       }
     },
-    [flushPendingIce, postSignal, teardownMedia]
+    [acceptOfferAndAnswer, flushPendingIce, teardownMedia]
   );
-
-  const pollSignalsRef = useRef<() => Promise<void>>(async () => {});
-
-  pollSignalsRef.current = async () => {
-    const sid = sessionIdRef.current;
-    if (!sid || !pcRef.current) return;
-    const peer = roleRef.current === "client" ? "interpreter" : "client";
-
-    try {
-      const res = await fetch(`/api/webrtc/${sid}/signals?peer=${peer}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const signals: WebRTCSignalMessage[] = data.signals || [];
-
-      for (const signal of signals) {
-        if (processedIdsRef.current.has(signal.id)) continue;
-        processedIdsRef.current.add(signal.id);
-        await handleRemoteSignal(signal);
-      }
-    } catch {
-      /* retry on next poll */
-    }
-  };
-
-  const clearServerSignals = useCallback(() => {
-    const sid = sessionIdRef.current;
-    if (!sid) return;
-    fetch(`/api/webrtc/${sid}/signals/clear`, { method: "DELETE" }).catch(() => {});
-  }, []);
 
   const endCall = useCallback(async () => {
     const sid = sessionIdRef.current;
@@ -342,9 +345,8 @@ export function useWebRTCCall({
       endedSessionsRef.current.add(sid);
     }
     await postSignal("hangup", {});
-    clearServerSignals();
     teardownMedia();
-  }, [postSignal, clearServerSignals, teardownMedia]);
+  }, [postSignal, teardownMedia]);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -357,6 +359,29 @@ export function useWebRTCCall({
 
     const mountId = ++mountGenRef.current;
     let cancelled = false;
+    const socket = getCallSocket(getCurrentUserIdForSocket(role), role);
+    signalSocketRef.current = socket;
+    const unsubscribe = socket.subscribe((message) => {
+      if (!message.type.startsWith("webrtc.")) return;
+      if (!("sessionId" in message) || message.sessionId !== sessionIdRef.current) return;
+      if (!("senderRole" in message) || message.senderRole === roleRef.current) return;
+
+      const signalType = message.type.replace("webrtc.", "") as WebRTCSignalMessage["signalType"];
+      const signal: WebRTCSignalMessage = {
+        id: message.signal?.id || `${message.type}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        senderRole: message.senderRole,
+        signalType,
+        payload: message.signal?.payload || message.payload || {},
+        createdAt: message.signal?.createdAt || new Date().toISOString(),
+      };
+      if (processedIdsRef.current.has(signal.id)) return;
+      if (!pcRef.current) {
+        pendingSignalsRef.current.push(signal);
+        return;
+      }
+      processedIdsRef.current.add(signal.id);
+      void handleRemoteSignal(signal);
+    });
 
     const start = async () => {
       try {
@@ -415,19 +440,20 @@ export function useWebRTCCall({
         }
 
         if (isCallerRef.current) {
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true,
-          });
+          const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-          await postSignal("offer", offer);
+          if (pc.localDescription) {
+            await postSignal("offer", pc.localDescription.toJSON());
+          }
         }
 
-        await pollSignalsRef.current();
-        stopPollTimer();
-        pollTimerRef.current = setInterval(() => {
-          void pollSignalsRef.current();
-        }, 400);
+        const pendingSignals = [...pendingSignalsRef.current];
+        pendingSignalsRef.current = [];
+        for (const signal of pendingSignals) {
+          if (processedIdsRef.current.has(signal.id)) continue;
+          processedIdsRef.current.add(signal.id);
+          await handleRemoteSignal(signal);
+        }
 
         // Callee: if video was unavailable at answer time, renegotiate once camera frees up
         if (!isCallerRef.current && stream.getVideoTracks().length === 0) {
@@ -459,6 +485,7 @@ export function useWebRTCCall({
 
     return () => {
       cancelled = true;
+      unsubscribe();
       if (mountId === mountGenRef.current) {
         teardownMedia();
       }

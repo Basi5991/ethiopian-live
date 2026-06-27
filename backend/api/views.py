@@ -49,6 +49,33 @@ from .utils import (
 
 
 DEMO_PASSWORDS = {"demo1234", "••••••••", "********"}
+LIVE_CLIENT_SESSION_STATUSES = ("incoming", "active", "pending")
+
+
+def get_live_client_session(client_profile: Profile | None) -> Session | None:
+    if not client_profile:
+        return None
+    return (
+        Session.objects.filter(
+            client=client_profile.user,
+            status__in=LIVE_CLIENT_SESSION_STATUSES,
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
+def reject_overlapping_client_call(client_profile: Profile | None) -> Response | None:
+    existing = get_live_client_session(client_profile)
+    if not existing:
+        return None
+    return Response(
+        {
+            "error": "You already have a call in progress. End or cancel the current call before starting another one.",
+            "session": serialize_session(existing),
+        },
+        status=status.HTTP_409_CONFLICT,
+    )
 
 
 class AuthLoginView(APIView):
@@ -170,6 +197,9 @@ class SessionRequestView(APIView):
 
         if not client_profile:
             return Response({"error": "No client profile configured."}, status=status.HTTP_400_BAD_REQUEST)
+        overlap_response = reject_overlapping_client_call(client_profile)
+        if overlap_response:
+            return overlap_response
 
         matched = next(
             (
@@ -266,6 +296,9 @@ class CallDialView(APIView):
 
         if not client_profile:
             return Response({"error": "No client profile configured."}, status=status.HTTP_400_BAD_REQUEST)
+        overlap_response = reject_overlapping_client_call(client_profile)
+        if overlap_response:
+            return overlap_response
 
         target = get_profile_by_external_id(interpreter_id) if interpreter_id else None
         if target and not interpreter_supports_language_pair(target.languages, language_from, language_to):
@@ -362,6 +395,10 @@ class SessionAcceptView(APIView):
         session.interpreter_name = interpreter_name or profile.user.get_full_name()
         session.status = "active"
         session.save()
+        Session.objects.filter(
+            client=session.client,
+            status__in=LIVE_CLIENT_SESSION_STATUSES,
+        ).exclude(pk=session.pk).update(status="cancelled")
 
         ChatMessage.objects.create(
             session=session,

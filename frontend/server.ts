@@ -1,4 +1,5 @@
 import express from "express";
+import type { Response } from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
@@ -451,6 +452,28 @@ function resolveClientProfile(clientId: string | undefined): { client: User | un
     return { client: undefined, error: "No client profile configured." };
   }
   return { client: fallback };
+}
+
+const LIVE_CLIENT_SESSION_STATUSES: Session["status"][] = ["incoming", "active", "pending"];
+
+function getLiveClientSession(clientId: string | undefined): Session | undefined {
+  if (!clientId) return undefined;
+  return sessions.find(
+    (session) =>
+      session.clientId === clientId &&
+      LIVE_CLIENT_SESSION_STATUSES.includes(session.status)
+  );
+}
+
+function rejectOverlappingClientCall(clientId: string | undefined, res: Response): boolean {
+  const existing = getLiveClientSession(clientId);
+  if (!existing) return false;
+
+  res.status(409).json({
+    error: "You already have a call in progress. End or cancel the current call before starting another one.",
+    session: existing,
+  });
+  return true;
 }
 
 // Helper to push audit logs
@@ -1107,6 +1130,9 @@ app.post("/api/calls/dial", (req, res) => {
   if (contract.status === "expired") {
     return res.status(400).json({ error: "Access Denied: Your corporate SLA Contract duration has expired. Please contact your administrative manager." });
   }
+  if (rejectOverlappingClientCall(client!.id, res)) {
+    return;
+  }
 
   const parsedCost = Number(cost) || 350;
   const targetInt = users.find(u => u.id === interpreterId);
@@ -1209,6 +1235,9 @@ app.post("/api/sessions/request", (req, res) => {
   if (contract.status === "expired") {
     return res.status(400).json({ error: "Access Denied: Your corporate SLA Contract duration has expired. Please contact an Administrator to extend validity." });
   }
+  if (rejectOverlappingClientCall(client!.id, res)) {
+    return;
+  }
 
   // Under active corporate SLA contract, billing processed post-service
   const parsedCost = Number(cost) || 0;
@@ -1278,6 +1307,22 @@ app.post("/api/sessions/:id/accept", (req, res) => {
   session.status = "active";
   session.interpreterId = interpreter.id;
   session.interpreterName = interpreter.name;
+  sessions.forEach((candidate) => {
+    if (
+      candidate.id !== session.id &&
+      candidate.clientId === session.clientId &&
+      LIVE_CLIENT_SESSION_STATUSES.includes(candidate.status)
+    ) {
+      candidate.status = "cancelled";
+      candidate.chatMessages.push({
+        id: `msg_cancel_overlap_${Date.now()}`,
+        senderRole: "system",
+        senderName: "System",
+        text: "Cancelled because another call from this client was accepted.",
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
   session.chatMessages.push({
     id: `msg_${Date.now()}`,
     senderRole: "system",

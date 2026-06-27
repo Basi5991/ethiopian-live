@@ -3,11 +3,12 @@ import {
   CreditCard, Send, Clock, Shield, RefreshCw,
   PhoneCall, PhoneOff, Wifi, Star, Sparkle, Sparkles,
   Zap, Bot, ShieldCheck, CheckCircle2, LayoutGrid, ChevronDown,
-  Camera, ArrowLeftRight, Globe2
+  Camera, ArrowLeftRight, Globe2, Sun, LogOut
 } from "lucide-react";
 import { User, Session, Transaction, ContractDetails } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
+import { getCallSocket } from "../lib/callSocket";
 import { interpreterSupportsLanguagePair } from "../lib/interpreterMatching";
 
 // Helper for playBeepTone
@@ -67,6 +68,13 @@ const INTERPRETER_EXT: Record<string, string> = {
   usr_int4: "0914",
   usr_int5: "0915",
   usr_int6: "0916",
+};
+
+const LIVE_CLIENT_STATUSES: Session["status"][] = ["active", "incoming", "pending"];
+const LIVE_SESSION_PRIORITY: Record<string, number> = {
+  active: 0,
+  incoming: 1,
+  pending: 2,
 };
 
 function ClientBannerSkyline() {
@@ -138,6 +146,7 @@ export default function ClientDashboard({
 
   const isInstitutionalClient = Boolean(currentUser?.contractId);
   const clientId = currentUser?.id || "usr_client13";
+  const callSocket = React.useMemo(() => getCallSocket(clientId, "client"), [clientId]);
 
   // Dashboard Slider Section Switcher
   const [dashboardSlide, setDashboardSlide] = useState<"terminal" | "ai" | "billing">("terminal");
@@ -215,6 +224,47 @@ export default function ClientDashboard({
   const [showSimulateOptions, setShowSimulateOptions] = useState(false);
 
   const ethiopianLanguages = ["Amharic", "Afaan Oromo", "Tigrinya", "Somali", "English", "Afar"];
+  const liveClientSession = React.useMemo(() => {
+    return sessions
+      .filter(
+        (session) =>
+          session.clientId === clientId &&
+          session.status === "active" &&
+          session.id !== dismissedSessionId
+      )
+      .sort((a, b) => {
+        const priorityDelta = (LIVE_SESSION_PRIORITY[a.status] ?? 99) - (LIVE_SESSION_PRIORITY[b.status] ?? 99);
+        if (priorityDelta !== 0) return priorityDelta;
+        return b.id.localeCompare(a.id);
+      })[0] || null;
+  }, [sessions, clientId, dismissedSessionId]);
+  const blockingSession =
+    activeSession && LIVE_CLIENT_STATUSES.includes(activeSession.status) && activeSession.id !== dismissedSessionId
+      ? activeSession
+      : liveClientSession;
+  const hasOverlappingCall = Boolean(blockingSession);
+
+  useEffect(() => {
+    return callSocket.subscribe((message) => {
+      if (message.type === "call.created" || message.type === "call.ringing" || message.type === "call.accepted") {
+        setDismissedSessionId(null);
+        setActiveSession(message.session);
+        setIsSubmitting(false);
+        onActionComplete();
+      } else if (message.type === "call.ended") {
+        setDismissedSessionId(message.session.id);
+        setActiveSession((prev) => (prev?.id === message.session.id ? null : prev));
+        clearCallMedia();
+        onActionComplete();
+      } else if (message.type === "call.error") {
+        setWizardError(message.error);
+        setIsSubmitting(false);
+        if (message.session) {
+          setActiveSession(message.session);
+        }
+      }
+    });
+  }, [callSocket, onActionComplete]);
 
   const clearCallMedia = () => {
     setCallMediaStream((prev) => {
@@ -239,14 +289,8 @@ export default function ClientDashboard({
 
   // Watch sessions for active patient context
   useEffect(() => {
-    const live = sessions.find(
-      (s) =>
-        s.clientId === clientId &&
-        ["active", "incoming", "pending"].includes(s.status) &&
-        s.id !== dismissedSessionId
-    );
-    if (live) {
-      setActiveSession(live);
+    if (liveClientSession) {
+      setActiveSession(liveClientSession);
       return;
     }
 
@@ -257,7 +301,7 @@ export default function ClientDashboard({
       if (["cancelled", "completed", "missed"].includes(match.status)) return null;
       return prev;
     });
-  }, [sessions, clientId, dismissedSessionId]);
+  }, [sessions, dismissedSessionId, liveClientSession]);
 
   useEffect(() => {
     const completedSessions = sessions.filter(
@@ -295,6 +339,14 @@ export default function ClientDashboard({
       if (intervalId) clearInterval(intervalId);
     };
   }, [activeSession?.status, activeSession?.id]);
+
+  useEffect(() => {
+    if (activeSession?.status !== "incoming") return;
+    const refreshId = window.setInterval(() => {
+      onActionComplete();
+    }, 1000);
+    return () => window.clearInterval(refreshId);
+  }, [activeSession?.status, activeSession?.id, onActionComplete]);
 
   useEffect(() => {
     if (contractDetails) {
@@ -335,6 +387,12 @@ export default function ClientDashboard({
   const handleConnectRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setWizardError("");
+
+    if (hasOverlappingCall) {
+      setWizardError("You already have a call in progress. End or cancel the current call before starting another one.");
+      return;
+    }
+
     setIsSubmitting(true);
 
     const cost = getEstimatedCost();
@@ -356,50 +414,33 @@ export default function ClientDashboard({
         }
       }
 
-      const res = await fetch("/api/sessions/request", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          languageFrom: langFrom,
-          languageTo: langTo,
-          serviceType,
-          serviceMode,
-          scheduledTime: scheduledTimeValue,
-          cost,
-          clientId,
-        })
+      callSocket.send("call.request", {
+        languageFrom: langFrom,
+        languageTo: langTo,
+        serviceType,
+        serviceMode,
+        scheduledTime: scheduledTimeValue,
+        cost,
+        clientId,
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.session) {
-          setDismissedSessionId(null);
-          setActiveSession(data.session);
-        }
-        onActionComplete();
-        playBeepTone(980, 150);
-        if (isScheduled) {
-          alert("Success: Language specialist reserved for booked clinical allocation!");
-        }
-      } else {
-        const errorData = await res.json();
-        setWizardError(errorData.error || "System failed to establish connection line.");
-        if (stream) {
-          stream.getTracks().forEach((t) => t.stop());
-          setCallMediaStream(null);
-        }
+      playBeepTone(980, 150);
+      if (isScheduled) {
+        alert("Success: Language specialist reserved for booked clinical allocation!");
       }
     } catch (err) {
       setWizardError("Network request timed out. Please check Addis Cloud link status.");
       clearCallMedia();
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
   // Handle direct extension dialing from keypad code
   const handleDirectDialExt = async (interpreterId: string) => {
     setWizardError("");
+    if (hasOverlappingCall) {
+      setWizardError("You already have a call in progress. End or cancel the current call before dialing another interpreter.");
+      return;
+    }
+
     const targetInt = users.find(u => u.id === interpreterId);
     if (!targetInt) return;
 
@@ -421,35 +462,16 @@ export default function ClientDashboard({
         console.error("Media access failed on dial:", err);
       }
 
-      const res = await fetch("/api/calls/dial", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          interpreterId,
-          languageFrom: langFrom,
-          languageTo: langTo,
-          serviceType,
-          serviceMode: "Both",
-          cost,
-          clientId,
-        })
+      callSocket.send("call.request", {
+        interpreterId,
+        languageFrom: langFrom,
+        languageTo: langTo,
+        serviceType,
+        serviceMode: "Both",
+        scheduledTime: "instant",
+        cost,
+        clientId,
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (data.session) {
-          setDismissedSessionId(null);
-          setActiveSession(data.session);
-        }
-        onActionComplete();
-      } else {
-        const errData = await res.json();
-        setWizardError(errData.error || "Connection refused.");
-        if (stream) {
-          stream.getTracks().forEach((t) => t.stop());
-          setCallMediaStream(null);
-        }
-      }
     } catch (err) {
       setWizardError("Network connection failed.");
       clearCallMedia();
@@ -646,7 +668,7 @@ export default function ClientDashboard({
     setActiveSession(null);
     clearCallMedia();
     try {
-      await fetch(`/api/sessions/${sessionId}/reject`, { method: "POST" });
+      callSocket.send("call.cancel", { sessionId });
       onActionComplete();
       playBeepTone(280, 200);
     } catch (e) {
@@ -845,117 +867,112 @@ export default function ClientDashboard({
     : "bg-zinc-950/60 border-white/5 text-white";
 
   return (
-    <div className="space-y-4 animate-fade-in font-sans max-w-5xl mx-auto w-full">
-      
-      {/* Welcome banner */}
-      <div className={`relative overflow-hidden rounded-2xl border p-6 sm:p-7 ${
-        theme === "light"
-          ? "bg-gradient-to-br from-[#eef4ff] via-[#f4f8ff] to-white border-blue-100/80"
-          : "bg-gradient-to-br from-blue-950/30 to-indigo-950/20 border-white/5"
-      }`}>
-        <ClientBannerSkyline />
-        <div className="relative z-10 max-w-[62%] space-y-3">
-          <h2 className={`text-xl sm:text-2xl font-bold tracking-tight ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-            Selam, {currentUser?.name || "Client Partner"}.
-          </h2>
-          <p className={`text-sm leading-relaxed ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-            Choose languages, press start, and connect with an interpreter.
-          </p>
-          <div className={`flex flex-wrap items-center gap-4 pt-1 text-xs ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-            <span className="inline-flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5" />
-              Addis Ababa UTC+3
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5" />
-              {contextOrgName} Portal
-            </span>
+    <div className="animate-fade-in font-sans w-full">
+      <div className="relative mx-auto w-full max-w-[680px] min-h-[min(880px,100svh)] overflow-hidden rounded-[1.6rem] sm:rounded-[2.25rem] border border-cyan-100/60 bg-[radial-gradient(circle_at_82%_18%,rgba(182,232,255,0.92),transparent_28%),linear-gradient(180deg,#bfe6fb_0%,#1786c5_42%,#00699a_100%)] p-3 sm:p-5 md:p-7 shadow-[0_30px_80px_rgba(6,56,93,0.35)]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_60%_44%,rgba(255,255,255,0.45),transparent_12%),radial-gradient(circle_at_88%_50%,rgba(255,255,255,0.55),transparent_10%),linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.18)_48%,transparent_55%)]" />
+        <div className="pointer-events-none absolute -left-24 bottom-16 h-80 w-[760px] rotate-[-12deg] opacity-50">
+          <div className="h-full w-full rounded-full border-t border-white/45 blur-[1px]" />
+          <div className="-mt-64 h-full w-full rounded-full border-t border-cyan-100/60 blur-[1px]" />
+          <div className="-mt-56 h-full w-full rounded-full border-t border-blue-100/45 blur-[1px]" />
+        </div>
+        <div className="pointer-events-none absolute bottom-10 right-8 h-10 w-10 rotate-45 rounded-[12px] bg-white/50 blur-[0.2px]" />
+
+      {/* Screenshot-style ORZO header */}
+      <div className="relative z-10 -mx-3 -mt-3 sm:-mx-5 sm:-mt-5 md:-mx-7 md:-mt-7 px-3 sm:px-5 md:px-7 py-3 sm:py-3.5 bg-white/55 backdrop-blur-xl border-b border-white/55 shadow-[0_10px_25px_rgba(30,92,132,0.14)]">
+        <div className="flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-10 w-10 sm:h-12 sm:w-12 shrink-0 rounded-full bg-[radial-gradient(circle_at_30%_25%,#ffffff,#aab5c5_48%,#566173)] shadow-[inset_0_2px_4px_rgba(255,255,255,0.9),0_5px_10px_rgba(15,23,42,0.32)] flex items-center justify-center text-[9px] sm:text-[11px] font-black text-slate-800">
+              ORZO
+            </div>
+            <div className="leading-none">
+              <p className="text-[clamp(1.15rem,5vw,1.65rem)] font-black tracking-tight text-slate-950">ORZO</p>
+              <p className="text-[clamp(1rem,4.4vw,1.55rem)] font-black tracking-tight text-slate-950">Live Interpretation</p>
+            </div>
+          </div>
+          <div className="hidden sm:flex items-center gap-3">
+            <button
+              type="button"
+              className="h-12 md:h-14 rounded-2xl border border-white/70 bg-white/50 px-4 md:px-5 text-[11px] md:text-sm font-black text-slate-800 shadow-[inset_0_1px_2px_rgba(255,255,255,0.9),0_7px_16px_rgba(15,23,42,0.22)]"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Sun className="h-5 w-5 text-amber-400" />
+                WHITE<br />THEME
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                localStorage.removeItem("orzo_auth_user");
+                window.location.reload();
+              }}
+              className="h-12 md:h-14 rounded-2xl border border-white/70 bg-white/60 px-4 md:px-5 text-[11px] md:text-sm font-black text-slate-950 shadow-[inset_0_1px_2px_rgba(255,255,255,0.9),0_7px_16px_rgba(15,23,42,0.28)]"
+            >
+              <span className="inline-flex items-center gap-2">
+                <LogOut className="h-5 w-5" />
+                SIGN<br />OUT
+              </span>
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Context status bar */}
-      <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border px-5 py-3.5 ${cardSurface}`}>
-        <div className={`text-sm ${theme === "light" ? "text-slate-700" : "text-slate-300"}`}>
-          Context:{" "}
-          <span className={`font-bold ${theme === "light" ? "text-[#0B1F4D]" : "text-white"}`}>
-            {contextOrgName} ({contractDetails?.status === "expired" ? "Expired" : "Active"})
+      <div className="relative z-10 mx-auto mt-3 mb-6 sm:mb-9 h-12 sm:h-16 max-w-[540px] rounded-b-[1.4rem] sm:rounded-b-[1.8rem] border-x border-b border-white/35 bg-white/15 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
+        <div className="absolute left-4 sm:left-7 top-2 rounded-2xl border border-emerald-100/60 bg-emerald-100/80 px-4 sm:px-6 py-1.5 sm:py-2 text-[clamp(0.78rem,2.5vw,1rem)] font-black text-emerald-900 shadow-[0_8px_18px_rgba(15,118,110,0.18)]">
+          <span className="inline-flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            {contractDetails?.status === "expired" ? "Expired" : `${contractDaysValid ?? 12} Days Valid`}
           </span>
         </div>
-        {contractDetails ? (
-          <span className={`inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full text-xs font-semibold border ${
-            contractDetails.status === "expired"
-              ? "bg-rose-50 text-rose-600 border-rose-200"
-              : "bg-emerald-50 text-emerald-700 border-emerald-200"
-          }`}>
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            {contractDetails.status === "expired" ? "Expired" : `${contractDaysValid} Days Valid`}
-          </span>
-        ) : !isInstitutionalClient ? (
-          <span className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            {walletBalance.toFixed(0)} ETB Balance
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1.5 self-start sm:self-auto px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            Offline Invoicing
-          </span>
-        )}
       </div>
 
       {/* Reference-style user navigation */}
-      <div className={`rounded-[2rem] border p-3 grid grid-cols-1 sm:grid-cols-3 gap-4 ${
-        theme === "light"
-          ? "bg-white/35 border-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_45px_rgba(15,70,120,0.18)] backdrop-blur-xl"
-          : "bg-white/10 border-white/10 shadow-2xl backdrop-blur-xl"
-      }`}>
+      <div className="relative z-10 mx-auto grid max-w-[540px] grid-cols-3 gap-2.5 sm:gap-4 md:gap-5">
         <button
           type="button"
           onClick={() => { setDashboardSlide("terminal"); playBeepTone(400, 50); }}
-          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
+          className={`h-[86px] sm:h-[104px] md:h-[118px] rounded-[1rem] sm:rounded-[1.35rem] px-2.5 sm:px-3.5 md:px-4 py-3 sm:py-4 text-left transition-all cursor-pointer border shadow-[inset_0_2px_3px_rgba(255,255,255,0.95),inset_0_-12px_25px_rgba(15,23,42,0.08),0_12px_22px_rgba(8,50,88,0.34)] ${
             dashboardSlide === "terminal"
-              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
-              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
+              ? "bg-gradient-to-br from-white via-slate-100 to-slate-300 text-slate-950 border-white"
+              : "bg-gradient-to-br from-white/70 via-slate-100/70 to-slate-400/60 text-slate-950 border-white/65 hover:from-white"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
-            <Zap className="w-5 h-5" />
-            Dispatch
+          <span className="flex h-full flex-col items-start justify-center gap-1.5 sm:gap-2 text-[clamp(0.88rem,3.4vw,1.5rem)] font-black leading-tight">
+            <Zap className="w-5 h-5 sm:w-7 sm:h-7 md:w-8 md:h-8 text-slate-700" />
+            <span>Dispatch</span>
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("ai"); playBeepTone(420, 50); }}
-          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
+          className={`h-[86px] sm:h-[104px] md:h-[118px] rounded-[1rem] sm:rounded-[1.35rem] px-2.5 sm:px-3.5 md:px-4 py-3 sm:py-4 text-left transition-all cursor-pointer border shadow-[inset_0_2px_3px_rgba(255,255,255,0.95),inset_0_-12px_25px_rgba(15,23,42,0.08),0_12px_22px_rgba(8,50,88,0.34)] ${
             dashboardSlide === "ai"
-              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
-              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
+              ? "bg-gradient-to-br from-white via-slate-100 to-slate-300 text-slate-950 border-white"
+              : "bg-gradient-to-br from-white/70 via-slate-100/70 to-slate-400/60 text-slate-950 border-white/65 hover:from-white"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
-            <Bot className="w-4 h-4" />
-            AI Hub
+          <span className="flex h-full flex-col items-start justify-center gap-1.5 sm:gap-2 text-[clamp(0.88rem,3.4vw,1.5rem)] font-black leading-tight">
+            <Bot className="w-5 h-5 sm:w-7 sm:h-7 md:w-8 md:h-8 text-slate-700" />
+            <span>AI Hub</span>
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("billing"); playBeepTone(440, 50); }}
-          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
+          className={`h-[86px] sm:h-[104px] md:h-[118px] rounded-[1rem] sm:rounded-[1.35rem] px-2.5 sm:px-3.5 md:px-4 py-3 sm:py-4 text-left transition-all cursor-pointer border shadow-[inset_0_2px_3px_rgba(255,255,255,0.95),inset_0_-12px_25px_rgba(15,23,42,0.08),0_12px_22px_rgba(8,50,88,0.34)] ${
             dashboardSlide === "billing"
-              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
-              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
+              ? "bg-gradient-to-br from-white via-slate-100 to-slate-300 text-slate-950 border-white"
+              : "bg-gradient-to-br from-white/70 via-slate-100/70 to-slate-400/60 text-slate-950 border-white/65 hover:from-white"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
-            <Camera className="w-4 h-4" />
-            Camera to Scan
+          <span className="flex h-full flex-col items-start justify-center gap-1.5 sm:gap-2 text-[clamp(0.78rem,3vw,1.35rem)] font-black leading-tight">
+            <Camera className="w-5 h-5 sm:w-7 sm:h-7 md:w-8 md:h-8 text-slate-700" />
+            <span>Camera to Scan</span>
           </span>
         </button>
       </div>
 
       {/* Main Responsive Grid Layout */}
-      <div className="grid grid-cols-12 gap-5">
+      <div className="relative z-10 mx-auto mt-6 grid max-w-[540px] grid-cols-12 gap-5">
 
         {/* Outer full-width Video session focus when session is active, so client stays focused */}
         {activeSession && (
@@ -1140,7 +1157,7 @@ export default function ClientDashboard({
         {dashboardSlide === "terminal" && (
           <div className="col-span-12 space-y-5 animate-fade-in">
 
-          <div className={`relative overflow-hidden rounded-[2rem] border p-5 sm:p-8 ${
+          <div className={`relative overflow-hidden rounded-[1.5rem] sm:rounded-[2rem] border p-4 sm:p-6 md:p-8 ${
             theme === "light"
               ? "bg-white/35 border-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_60px_rgba(15,70,120,0.22)] backdrop-blur-2xl"
               : "bg-slate-900/50 border-white/10 shadow-2xl backdrop-blur-2xl"
@@ -1148,15 +1165,15 @@ export default function ClientDashboard({
             <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-cyan-300/30 blur-3xl" />
             <div className="pointer-events-none absolute -left-16 bottom-0 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" />
 
-            <form onSubmit={handleConnectRequest} className="relative space-y-6">
+            <form onSubmit={handleConnectRequest} className="relative space-y-4 sm:space-y-5 md:space-y-6">
               <div className="flex items-center justify-between gap-3">
-                <h3 className={`inline-flex items-center gap-2 text-lg sm:text-xl font-black tracking-tight ${
+                <h3 className={`inline-flex items-center gap-2 text-[clamp(1rem,4vw,1.25rem)] font-black tracking-tight ${
                   theme === "light" ? "text-slate-800 drop-shadow-sm" : "text-white"
                 }`}>
-                  <Zap className="w-6 h-6 text-amber-400 fill-amber-300" />
+                  <Zap className="w-5 h-5 sm:w-6 sm:h-6 text-amber-400 fill-amber-300" />
                   Quick Connection Channel
                 </h3>
-                <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-black border ${
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 sm:px-3 py-1 text-[10px] sm:text-xs font-black border ${
                   contractDetails?.status === "expired"
                     ? "bg-rose-100/80 text-rose-700 border-rose-200"
                     : "bg-emerald-100/80 text-emerald-700 border-emerald-200"
@@ -1166,17 +1183,17 @@ export default function ClientDashboard({
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-4 md:gap-5 items-end">
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-3.5 md:gap-5 items-end">
                 <div className="space-y-2">
-                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                  <label className={`text-[clamp(0.72rem,2.4vw,0.9rem)] font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
                     From Language
                   </label>
                   <div className="relative">
-                    <Globe2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-emerald-600" />
+                    <Globe2 className="absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-emerald-600" />
                     <select
                       value={langFrom}
                       onChange={(e) => { setLangFrom(e.target.value); playBeepTone(400, 80); }}
-                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-11 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                      className={`w-full appearance-none rounded-xl sm:rounded-2xl border py-3 sm:py-4 pl-10 sm:pl-12 pr-10 sm:pr-11 text-[clamp(0.98rem,4vw,1.125rem)] font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
                         theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
                       }`}
                     >
@@ -1184,7 +1201,7 @@ export default function ClientDashboard({
                         <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
 
@@ -1195,24 +1212,24 @@ export default function ClientDashboard({
                     setLangTo(langFrom);
                     playBeepTone(460, 80);
                   }}
-                  className={`mb-1 mx-auto md:mx-0 h-12 w-12 rounded-full border flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_22px_rgba(15,23,42,0.16)] ${
+                  className={`mb-1 mx-auto md:mx-0 h-10 w-10 sm:h-12 sm:w-12 rounded-full border flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_22px_rgba(15,23,42,0.16)] ${
                     theme === "light" ? "bg-white/75 border-white/80 text-slate-700" : "bg-white/10 border-white/10 text-white"
                   }`}
                   aria-label="Swap languages"
                 >
-                  <ArrowLeftRight className="w-5 h-5" />
+                  <ArrowLeftRight className="w-4 h-4 sm:w-5 sm:h-5" />
                 </button>
 
                 <div className="space-y-2">
-                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                  <label className={`text-[clamp(0.72rem,2.4vw,0.9rem)] font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
                     To Language
                   </label>
                   <div className="relative">
-                    <Globe2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-600" />
+                    <Globe2 className="absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-blue-600" />
                     <select
                       value={langTo}
                       onChange={(e) => { setLangTo(e.target.value); playBeepTone(420, 80); }}
-                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-11 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                      className={`w-full appearance-none rounded-xl sm:rounded-2xl border py-3 sm:py-4 pl-10 sm:pl-12 pr-10 sm:pr-11 text-[clamp(0.98rem,4vw,1.125rem)] font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
                         theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
                       }`}
                     >
@@ -1220,21 +1237,21 @@ export default function ClientDashboard({
                         <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-4">
                 <div className="space-y-2">
-                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                  <label className={`text-[clamp(0.72rem,2.4vw,0.9rem)] font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
                     Specialty
                   </label>
                   <div className="relative">
                     <select
                       value={serviceType}
                       onChange={(e) => { setServiceType(e.target.value as typeof serviceType); playBeepTone(520, 100); }}
-                      className={`w-full appearance-none rounded-2xl border px-5 py-4 pr-12 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                      className={`w-full appearance-none rounded-xl sm:rounded-2xl border px-4 sm:px-5 py-3 sm:py-4 pr-10 sm:pr-12 text-[clamp(0.98rem,4vw,1.125rem)] font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
                         theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
                       }`}
                     >
@@ -1243,20 +1260,20 @@ export default function ClientDashboard({
                       <option value="business">Business</option>
                       <option value="general">General</option>
                     </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                  <label className={`text-[clamp(0.72rem,2.4vw,0.9rem)] font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
                     Connection Mode
                   </label>
                   <div className="relative">
-                    <Zap className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-500" />
+                    <Zap className="absolute left-3.5 sm:left-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
                     <select
                       value={serviceMode}
                       onChange={(e) => { setServiceMode(e.target.value as typeof serviceMode); playBeepTone(550, 80); }}
-                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-12 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                      className={`w-full appearance-none rounded-xl sm:rounded-2xl border py-3 sm:py-4 pl-10 sm:pl-12 pr-10 sm:pr-12 text-[clamp(0.98rem,4vw,1.125rem)] font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
                         theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
                       }`}
                     >
@@ -1264,32 +1281,32 @@ export default function ClientDashboard({
                       <option value="Human">Human</option>
                       <option value="AI">AI</option>
                     </select>
-                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
+                    <ChevronDown className="absolute right-3.5 sm:right-4 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
               </div>
 
-              <div className={`flex items-center gap-3 rounded-2xl border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(15,23,42,0.12)] ${
+              <div className={`flex items-center gap-2.5 sm:gap-3 rounded-xl sm:rounded-2xl border px-3 sm:px-4 py-3 sm:py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(15,23,42,0.12)] ${
                 theme === "light" ? "bg-white/65 border-white/70 text-slate-800" : "bg-white/10 border-white/10 text-white"
               }`}>
-                <ShieldCheck className="w-8 h-8 text-slate-500" />
-                <p className="flex-1 text-base font-semibold">
+                <ShieldCheck className="w-6 h-6 sm:w-8 sm:h-8 shrink-0 text-slate-500" />
+                <p className="flex-1 text-[clamp(0.82rem,3vw,1rem)] font-semibold leading-snug">
                   Retainer Billing: <span className="font-black">{getEstimatedCost()} ETB</span>{" "}
                   <span className={theme === "light" ? "text-slate-500" : "text-slate-300"}>
                     ({isInstitutionalClient ? "Verified" : "Wallet Hold"})
                   </span>
                 </p>
-                <CheckCircle2 className="w-5 h-5 text-indigo-500" />
+                <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 text-indigo-500" />
               </div>
 
-              <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-white/40 border-white/60" : "bg-white/5 border-white/10"}`}>
+              <div className={`rounded-xl sm:rounded-2xl border p-2.5 sm:p-3 ${theme === "light" ? "bg-white/40 border-white/60" : "bg-white/5 border-white/10"}`}>
                 <button
                   type="button"
                   onClick={() => setIsScheduled(!isScheduled)}
-                  className={`w-full flex items-center justify-between text-sm font-bold ${theme === "light" ? "text-slate-700" : "text-slate-300"}`}
+                  className={`w-full flex items-center justify-between gap-3 text-[clamp(0.75rem,2.8vw,0.9rem)] font-bold ${theme === "light" ? "text-slate-700" : "text-slate-300"}`}
                 >
                   <span>{isScheduled ? "Scheduled channel" : "Instant channel"}</span>
-                  <span className="text-xs font-semibold text-blue-600">
+                  <span className="text-[clamp(0.68rem,2.4vw,0.75rem)] font-semibold text-blue-600">
                     {isScheduled ? "Switch to instant" : "Schedule for later"}
                   </span>
                 </button>
@@ -1327,20 +1344,26 @@ export default function ClientDashboard({
                 </div>
               )}
 
+              {hasOverlappingCall && (
+                <div className="p-3 rounded-xl bg-blue-50 text-blue-700 text-xs border border-blue-200 font-semibold">
+                  Current call is {blockingSession?.status === "active" ? "active" : "waiting for an interpreter"}. End or cancel it before starting another call.
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full rounded-2xl bg-gradient-to-r from-[#0B66D8] to-[#0757BF] hover:from-blue-600 hover:to-blue-700 text-white py-5 px-4 transition active:scale-[0.99] disabled:opacity-70 shadow-[0_18px_35px_rgba(37,99,235,0.35)] cursor-pointer border border-blue-300/30"
+                disabled={isSubmitting || hasOverlappingCall}
+                className="w-full rounded-xl sm:rounded-2xl bg-gradient-to-r from-[#0B66D8] to-[#0757BF] hover:from-blue-600 hover:to-blue-700 text-white py-4 sm:py-5 px-3 sm:px-4 transition active:scale-[0.99] disabled:opacity-70 disabled:cursor-not-allowed shadow-[0_18px_35px_rgba(37,99,235,0.35)] cursor-pointer border border-blue-300/30"
               >
                 {isSubmitting ? (
-                  <span className="inline-flex items-center gap-2 text-base font-black">
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                  <span className="inline-flex items-center gap-2 text-[clamp(0.95rem,3.5vw,1rem)] font-black">
+                    <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
                     Connecting Channel...
                   </span>
                 ) : (
-                  <span className="inline-flex items-center justify-center gap-2 text-lg font-black">
-                    <Zap className="w-5 h-5 fill-white/20" />
-                    {isScheduled ? "Schedule Translation Call" : "Start Translation Call"}
+                  <span className="inline-flex items-center justify-center gap-2 text-[clamp(1rem,4vw,1.125rem)] font-black">
+                    <Zap className="w-4 h-4 sm:w-5 sm:h-5 fill-white/20" />
+                    {hasOverlappingCall ? "Call Already In Progress" : isScheduled ? "Schedule Translation Call" : "Start Translation Call"}
                   </span>
                 )}
               </button>
@@ -1367,7 +1390,8 @@ export default function ClientDashboard({
                 <button
                   type="button"
                   onClick={handleKeypadCodeSubmit}
-                  className="rounded-xl bg-slate-900 text-white px-3 py-2 text-xs font-bold"
+                  disabled={hasOverlappingCall}
+                  className="rounded-xl bg-slate-900 text-white px-3 py-2 text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Dial
                 </button>
@@ -1405,9 +1429,10 @@ export default function ClientDashboard({
                       <button
                         type="button"
                         onClick={() => handleDirectDialExt(interpreter.id)}
-                        className="rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 text-xs font-black transition active:scale-95"
+                        disabled={hasOverlappingCall}
+                        className="rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 text-xs font-black transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        Call
+                        {hasOverlappingCall ? "Busy" : "Call"}
                       </button>
                     </div>
                   );
@@ -1876,6 +1901,7 @@ export default function ClientDashboard({
         </div>
       )}
 
+      </div>
     </div>
   );
 }

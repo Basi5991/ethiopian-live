@@ -23,12 +23,14 @@ if RENDER_EXTERNAL_HOSTNAME:
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "channels",
     "rest_framework",
     "corsheaders",
     "api",
@@ -65,6 +67,13 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = "terjuman.wsgi.application"
+ASGI_APPLICATION = "terjuman.asgi.application"
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",
+    }
+}
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:

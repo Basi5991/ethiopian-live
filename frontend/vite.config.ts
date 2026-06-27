@@ -27,7 +27,13 @@ export default defineConfig(() => {
           target: process.env.BACKEND_PROXY_URL,
           changeOrigin: true,
           secure: false,
-        }
+        },
+        '/ws': {
+          target: process.env.BACKEND_PROXY_URL,
+          changeOrigin: true,
+          secure: false,
+          ws: true,
+        },
       } : undefined,
     },
   };
