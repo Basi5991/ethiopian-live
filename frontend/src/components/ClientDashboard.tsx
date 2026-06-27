@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { 
   CreditCard, Send, Clock, Shield, RefreshCw,
   PhoneCall, PhoneOff, Wifi, Star, Sparkle, Sparkles,
-  Zap, Bot, ShieldCheck, CheckCircle2, LayoutGrid, ChevronDown
+  Zap, Bot, ShieldCheck, CheckCircle2, LayoutGrid, ChevronDown,
+  Camera, ArrowLeftRight, Globe2
 } from "lucide-react";
 import { User, Session, Transaction, ContractDetails } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
@@ -903,48 +904,52 @@ export default function ClientDashboard({
         )}
       </div>
 
-      {/* Simple navigation */}
-      <div className={`rounded-2xl border p-1.5 grid grid-cols-3 gap-1.5 ${cardSurface}`}>
+      {/* Reference-style user navigation */}
+      <div className={`rounded-[2rem] border p-3 grid grid-cols-1 sm:grid-cols-3 gap-4 ${
+        theme === "light"
+          ? "bg-white/35 border-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_18px_45px_rgba(15,70,120,0.18)] backdrop-blur-xl"
+          : "bg-white/10 border-white/10 shadow-2xl backdrop-blur-xl"
+      }`}>
         <button
           type="button"
           onClick={() => { setDashboardSlide("terminal"); playBeepTone(400, 50); }}
-          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
+          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
             dashboardSlide === "terminal"
-              ? "bg-blue-600 text-white shadow-sm"
-              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
+              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
+              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
-            <PhoneCall className="w-4 h-4" />
-            Call Interpreter
+          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
+            <Zap className="w-5 h-5" />
+            Dispatch
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("ai"); playBeepTone(420, 50); }}
-          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
+          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
             dashboardSlide === "ai"
-              ? "bg-purple-600 text-white shadow-sm"
-              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
+              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
+              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
+          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
             <Bot className="w-4 h-4" />
-            AI Help
+            AI Hub
           </span>
         </button>
         <button
           type="button"
           onClick={() => { setDashboardSlide("billing"); playBeepTone(440, 50); }}
-          className={`rounded-xl px-3 py-2.5 text-center transition-all cursor-pointer ${
+          className={`rounded-2xl px-4 py-4 text-left transition-all cursor-pointer border shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_10px_24px_rgba(15,23,42,0.18)] ${
             dashboardSlide === "billing"
-              ? "bg-emerald-600 text-white shadow-sm"
-              : theme === "light" ? "text-slate-600 hover:bg-slate-50" : "text-slate-400 hover:bg-white/5"
+              ? "bg-gradient-to-br from-white to-slate-200 text-slate-950 border-white"
+              : theme === "light" ? "bg-white/55 text-slate-700 border-white/70 hover:bg-white/80" : "bg-white/10 text-slate-200 border-white/10 hover:bg-white/15"
           }`}
         >
-          <span className="inline-flex items-center justify-center gap-2 text-xs sm:text-sm font-bold">
-            <CreditCard className="w-4 h-4" />
-            Billing & SLA
+          <span className="inline-flex items-center justify-center gap-2 text-base font-black">
+            <Camera className="w-4 h-4" />
+            Camera to Scan
           </span>
         </button>
       </div>
@@ -1135,115 +1140,157 @@ export default function ClientDashboard({
         {dashboardSlide === "terminal" && (
           <div className="col-span-12 space-y-5 animate-fade-in">
 
-          <div className={`rounded-3xl border p-5 sm:p-7 ${cardSurface}`}>
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
-              <div>
-                <h3 className={`text-xl font-black tracking-tight ${theme === "light" ? "text-slate-900" : "text-white"}`}>
-                  Start Interpreter Call
-                </h3>
-                <p className={`text-sm mt-1 ${theme === "light" ? "text-slate-500" : "text-slate-400"}`}>
-                  Pick languages and press start. We will route you to the best available interpreter.
-                </p>
-              </div>
-              <span className={`inline-flex items-center gap-1.5 self-start rounded-full px-3 py-1 text-xs font-bold border ${
-                contractDetails?.status === "expired"
-                  ? "bg-rose-50 text-rose-600 border-rose-200"
-                  : "bg-emerald-50 text-emerald-700 border-emerald-200"
-              }`}>
-                <ShieldCheck className="w-3.5 h-3.5" />
-                {contractDetails?.status === "expired" ? "SLA expired" : "Ready to call"}
-              </span>
-            </div>
+          <div className={`relative overflow-hidden rounded-[2rem] border p-5 sm:p-8 ${
+            theme === "light"
+              ? "bg-white/35 border-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_24px_60px_rgba(15,70,120,0.22)] backdrop-blur-2xl"
+              : "bg-slate-900/50 border-white/10 shadow-2xl backdrop-blur-2xl"
+          }`}>
+            <div className="pointer-events-none absolute -right-20 -top-24 h-56 w-56 rounded-full bg-cyan-300/30 blur-3xl" />
+            <div className="pointer-events-none absolute -left-16 bottom-0 h-40 w-40 rounded-full bg-blue-500/20 blur-3xl" />
 
-            <form onSubmit={handleConnectRequest} className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    From
+            <form onSubmit={handleConnectRequest} className="relative space-y-6">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className={`inline-flex items-center gap-2 text-lg sm:text-xl font-black tracking-tight ${
+                  theme === "light" ? "text-slate-800 drop-shadow-sm" : "text-white"
+                }`}>
+                  <Zap className="w-6 h-6 text-amber-400 fill-amber-300" />
+                  Quick Connection Channel
+                </h3>
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-black border ${
+                  contractDetails?.status === "expired"
+                    ? "bg-rose-100/80 text-rose-700 border-rose-200"
+                    : "bg-emerald-100/80 text-emerald-700 border-emerald-200"
+                }`}>
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {contractDetails?.status === "expired" ? "Expired" : "Verified"}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-[1fr_auto_1fr] gap-4 md:gap-5 items-end">
+                <div className="space-y-2">
+                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                    From Language
                   </label>
                   <div className="relative">
+                    <Globe2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-emerald-600" />
                     <select
                       value={langFrom}
                       onChange={(e) => { setLangFrom(e.target.value); playBeepTone(400, 80); }}
-                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-base font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-11 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                        theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
+                      }`}
                     >
                       {ethiopianLanguages.map(l => (
                         <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    To
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLangFrom(langTo);
+                    setLangTo(langFrom);
+                    playBeepTone(460, 80);
+                  }}
+                  className={`mb-1 mx-auto md:mx-0 h-12 w-12 rounded-full border flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_10px_22px_rgba(15,23,42,0.16)] ${
+                    theme === "light" ? "bg-white/75 border-white/80 text-slate-700" : "bg-white/10 border-white/10 text-white"
+                  }`}
+                  aria-label="Swap languages"
+                >
+                  <ArrowLeftRight className="w-5 h-5" />
+                </button>
+
+                <div className="space-y-2">
+                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                    To Language
                   </label>
                   <div className="relative">
+                    <Globe2 className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-600" />
                     <select
                       value={langTo}
                       onChange={(e) => { setLangTo(e.target.value); playBeepTone(420, 80); }}
-                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-base font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-11 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                        theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
+                      }`}
                     >
                       {ethiopianLanguages.filter(l => l !== langFrom).map(l => (
                         <option key={l} value={l}>{l}</option>
                       ))}
                     </select>
-                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
+              </div>
 
-                <div className="space-y-1.5">
-                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    Call type
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                    Specialty
                   </label>
                   <div className="relative">
                     <select
                       value={serviceType}
                       onChange={(e) => { setServiceType(e.target.value as typeof serviceType); playBeepTone(520, 100); }}
-                      className={`w-full appearance-none border rounded-2xl px-4 py-3 pr-10 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${inputSurface}`}
+                      className={`w-full appearance-none rounded-2xl border px-5 py-4 pr-12 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                        theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
+                      }`}
                     >
-                      <option value="medical">Medical</option>
+                      <option value="medical">Medicine</option>
                       <option value="legal">Legal</option>
                       <option value="business">Business</option>
                       <option value="general">General</option>
                     </select>
-                    <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className={`text-xs font-bold uppercase tracking-wide ${theme === "light" ? "text-slate-600" : "text-slate-400"}`}>
-                    Interpreter
+                <div className="space-y-2">
+                  <label className={`text-sm font-black ${theme === "light" ? "text-slate-700" : "text-slate-200"}`}>
+                    Connection Mode
                   </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["Human", "AI", "Both"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => { setServiceMode(mode); playBeepTone(550, 80); }}
-                        className={`rounded-2xl border px-3 py-3 text-xs font-black transition ${
-                          serviceMode === mode
-                            ? "bg-blue-600 border-blue-600 text-white"
-                            : theme === "light" ? "bg-white border-slate-200 text-slate-600 hover:border-blue-200" : "bg-zinc-950/60 border-white/10 text-slate-300 hover:border-blue-500/40"
-                        }`}
-                      >
-                        {mode}
-                      </button>
-                    ))}
+                  <div className="relative">
+                    <Zap className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-amber-500" />
+                    <select
+                      value={serviceMode}
+                      onChange={(e) => { setServiceMode(e.target.value as typeof serviceMode); playBeepTone(550, 80); }}
+                      className={`w-full appearance-none rounded-2xl border py-4 pl-12 pr-12 text-lg font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.85),0_10px_24px_rgba(15,23,42,0.14)] focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer ${
+                        theme === "light" ? "bg-white/80 border-white/80 text-slate-900" : "bg-white/10 border-white/10 text-white"
+                      }`}
+                    >
+                      <option value="Both">Hybrid</option>
+                      <option value="Human">Human</option>
+                      <option value="AI">AI</option>
+                    </select>
+                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 pointer-events-none" />
                   </div>
                 </div>
               </div>
 
-              <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-slate-50 border-slate-200" : "bg-zinc-950/40 border-white/5"}`}>
+              <div className={`flex items-center gap-3 rounded-2xl border px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_10px_24px_rgba(15,23,42,0.12)] ${
+                theme === "light" ? "bg-white/65 border-white/70 text-slate-800" : "bg-white/10 border-white/10 text-white"
+              }`}>
+                <ShieldCheck className="w-8 h-8 text-slate-500" />
+                <p className="flex-1 text-base font-semibold">
+                  Retainer Billing: <span className="font-black">{getEstimatedCost()} ETB</span>{" "}
+                  <span className={theme === "light" ? "text-slate-500" : "text-slate-300"}>
+                    ({isInstitutionalClient ? "Verified" : "Wallet Hold"})
+                  </span>
+                </p>
+                <CheckCircle2 className="w-5 h-5 text-indigo-500" />
+              </div>
+
+              <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-white/40 border-white/60" : "bg-white/5 border-white/10"}`}>
                 <button
                   type="button"
                   onClick={() => setIsScheduled(!isScheduled)}
                   className={`w-full flex items-center justify-between text-sm font-bold ${theme === "light" ? "text-slate-700" : "text-slate-300"}`}
                 >
-                  <span>{isScheduled ? "Scheduled call" : "Call now"}</span>
-                  <span className="text-xs font-semibold text-blue-500">
-                    {isScheduled ? "Switch to now" : "Schedule for later"}
+                  <span>{isScheduled ? "Scheduled channel" : "Instant channel"}</span>
+                  <span className="text-xs font-semibold text-blue-600">
+                    {isScheduled ? "Switch to instant" : "Schedule for later"}
                   </span>
                 </button>
                 {isScheduled && (
@@ -1274,18 +1321,6 @@ export default function ClientDashboard({
                 )}
               </div>
 
-              <div className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border px-4 py-3 ${
-                theme === "light" ? "bg-blue-50/70 border-blue-100" : "bg-blue-500/10 border-blue-500/20"
-              }`}>
-                <p className={`text-xs ${theme === "light" ? "text-slate-600" : "text-slate-300"}`}>
-                  Estimated hold: <span className="font-black">{getEstimatedCost()} ETB</span>
-                  <span className="text-slate-400"> · SLA verified</span>
-                </p>
-                <p className="text-xs font-bold text-blue-500">
-                  {langFrom} to {langTo}
-                </p>
-              </div>
-
               {wizardError && (
                 <div className="p-3 rounded-xl bg-rose-50 text-rose-600 text-xs border border-rose-200">
                   {wizardError}
@@ -1295,17 +1330,17 @@ export default function ClientDashboard({
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="w-full rounded-2xl bg-[#2563EB] hover:bg-blue-600 text-white py-5 px-4 transition active:scale-[0.99] disabled:opacity-70 shadow-lg shadow-blue-500/25 cursor-pointer"
+                className="w-full rounded-2xl bg-gradient-to-r from-[#0B66D8] to-[#0757BF] hover:from-blue-600 hover:to-blue-700 text-white py-5 px-4 transition active:scale-[0.99] disabled:opacity-70 shadow-[0_18px_35px_rgba(37,99,235,0.35)] cursor-pointer border border-blue-300/30"
               >
                 {isSubmitting ? (
                   <span className="inline-flex items-center gap-2 text-base font-black">
                     <RefreshCw className="w-5 h-5 animate-spin" />
-                    Connecting...
+                    Connecting Channel...
                   </span>
                 ) : (
                   <span className="inline-flex items-center justify-center gap-2 text-lg font-black">
-                    <PhoneCall className="w-5 h-5" />
-                    {isScheduled ? "Schedule Call" : "Start Call Now"}
+                    <Zap className="w-5 h-5 fill-white/20" />
+                    {isScheduled ? "Schedule Translation Call" : "Start Translation Call"}
                   </span>
                 )}
               </button>
