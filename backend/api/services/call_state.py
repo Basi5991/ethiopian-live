@@ -231,57 +231,65 @@ def request_call(data: dict[str, Any]) -> CallStateResult:
     )
 
 
+def _accepted_call_result(session_id: str, interpreter_id: str, *, log_accept: bool = False) -> CallStateResult:
+    session = Session.objects.prefetch_related("chat_messages").select_related(
+        "client__profile", "interpreter__profile"
+    ).get(pk=session_id)
+    session_data = serialize_session(session)
+    if log_accept:
+        log_action(
+            f"Session {session_id} accepted by interpreter {session.interpreter_name}",
+            "interpreter",
+            session.interpreter_name,
+            "success",
+        )
+    return CallStateResult(
+        True,
+        event="call.accepted",
+        session=session_data,
+        client_id=session_data.get("clientId"),
+        target_interpreter_id=interpreter_id,
+    )
+
+
+def _interpreter_external_id(session: Session) -> str | None:
+    if not session.interpreter_id:
+        return None
+    profile = getattr(session.interpreter, "profile", None)
+    return profile.external_id if profile else None
+
+
 def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: str | None = None) -> CallStateResult:
     if not interpreter_id:
         return CallStateResult(False, error="A valid interpreter account is required to accept this call.", status=400)
 
+    profile = get_profile_by_external_id(interpreter_id)
+    if not profile or profile.role != "interpreter":
+        return CallStateResult(False, error="A valid interpreter account is required to accept this call.", status=400)
+
+    active_session = _active_interpreter_session(profile)
+    if active_session and active_session.pk != session_id:
+        return CallStateResult(False, error="You already have an active call.", status=409)
+
     with transaction.atomic():
         try:
+            # Lock only api_session. PostgreSQL rejects select_for_update() when
+            # select_related follows nullable FKs (interpreter is null on incoming calls).
             session = (
-                Session.objects.select_for_update()
-                .select_related("client__profile", "interpreter__profile")
+                Session.objects.select_for_update(of=("self",))
+                .select_related("client__profile")
                 .get(pk=session_id)
             )
         except Session.DoesNotExist:
             return CallStateResult(False, error="Session not found.", status=404)
 
         if session.status != "incoming":
-            assigned_id = None
-            if session.interpreter and hasattr(session.interpreter, "profile"):
-                assigned_id = session.interpreter.profile.external_id
-            if session.status == "active" and assigned_id == interpreter_id:
-                session = Session.objects.prefetch_related("chat_messages").select_related(
-                    "client__profile", "interpreter__profile"
-                ).get(pk=session_id)
-                session_data = serialize_session(session)
-                return CallStateResult(
-                    True,
-                    event="call.accepted",
-                    session=session_data,
-                    client_id=session_data.get("clientId"),
-                    target_interpreter_id=interpreter_id,
-                )
+            if session.status == "active" and _interpreter_external_id(session) == interpreter_id:
+                return _accepted_call_result(session_id, interpreter_id)
             return CallStateResult(False, error="This session is no longer available to accept.", status=409)
 
-        profile = get_profile_by_external_id(interpreter_id)
-        if not profile or profile.role != "interpreter":
-            return CallStateResult(False, error="A valid interpreter account is required to accept this call.", status=400)
-
-        active_session = _active_interpreter_session(profile)
-        if active_session:
-            if active_session.pk == session_id:
-                session = Session.objects.prefetch_related("chat_messages").select_related(
-                    "client__profile", "interpreter__profile"
-                ).get(pk=session_id)
-                session_data = serialize_session(session)
-                return CallStateResult(
-                    True,
-                    event="call.accepted",
-                    session=session_data,
-                    client_id=session_data.get("clientId"),
-                    target_interpreter_id=interpreter_id,
-                )
-            return CallStateResult(False, error="You already have an active call.", status=409)
+        if active_session and active_session.pk == session_id:
+            return _accepted_call_result(session_id, interpreter_id)
 
         if not can_interpreter_accept_session(session, profile):
             return CallStateResult(
@@ -293,7 +301,7 @@ def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: s
         session.interpreter = profile.user
         session.interpreter_name = interpreter_name or profile.user.get_full_name()
         session.status = "active"
-        session.save()
+        session.save(update_fields=["interpreter", "interpreter_name", "status"])
 
         Session.objects.filter(client=session.client, status__in=LIVE_CLIENT_SESSION_STATUSES).exclude(pk=session.pk).update(
             status="cancelled"
@@ -306,18 +314,7 @@ def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: s
             text=f"Interpreter {session.interpreter_name} accepted the session. Video line open.",
         )
 
-    session = Session.objects.prefetch_related("chat_messages").select_related("client__profile", "interpreter__profile").get(
-        pk=session_id
-    )
-    session_data = serialize_session(session)
-    log_action(f"Session {session_id} accepted by interpreter {session.interpreter_name}", "interpreter", session.interpreter_name, "success")
-    return CallStateResult(
-        True,
-        event="call.accepted",
-        session=session_data,
-        client_id=session_data.get("clientId"),
-        target_interpreter_id=interpreter_id,
-    )
+    return _accepted_call_result(session_id, interpreter_id, log_accept=True)
 
 
 def end_call(session_id: str, actor_id: str | None = None, reason: str = "ended") -> CallStateResult:

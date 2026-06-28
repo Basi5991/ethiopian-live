@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from decimal import Decimal
 
@@ -47,6 +48,7 @@ from .utils import (
     set_wallet_balance,
 )
 
+logger = logging.getLogger(__name__)
 
 DEMO_PASSWORDS = {"demo1234", "••••••••", "********"}
 LIVE_CLIENT_SESSION_STATUSES = ("incoming", "active", "pending")
@@ -147,36 +149,43 @@ class InitView(APIView):
     def get(self, request):
         from api.services.call_state import cleanup_stale_sessions
 
-        cleanup_stale_sessions()
+        try:
+            cleanup_stale_sessions()
 
-        client_id = request.query_params.get("clientId")
-        contract = None
-        if client_id:
-            profile = get_profile_by_external_id(client_id)
-            if profile and profile.contract_id:
-                contract = get_contract_for_client(profile)
+            client_id = request.query_params.get("clientId")
+            contract = None
+            if client_id:
+                profile = get_profile_by_external_id(client_id)
+                if profile and profile.contract_id:
+                    contract = get_contract_for_client(profile)
 
-        if not contract:
-            contract = check_and_get_contract()
+            if not contract:
+                contract = check_and_get_contract()
 
-        profiles = Profile.objects.select_related("user", "contract").all()
-        return Response(
-            {
-                "users": [serialize_user(p) for p in profiles],
-                "sessions": [serialize_session(s) for s in Session.objects.prefetch_related("chat_messages").all()],
-                "transactions": [serialize_transaction(t) for t in Transaction.objects.select_related("user__profile").all()],
-                "availabilities": [
-                    serialize_availability(a)
-                    for a in InterpreterAvailability.objects.select_related("interpreter__profile").all()
-                ],
-                "auditLogs": [serialize_audit_log(l) for l in AuditLog.objects.all()[:50]],
-                "clientWalletBalance": get_wallet_balance(),
-                "contractDetails": serialize_contract(contract) if contract else None,
-                "contractsList": [serialize_contract(c) for c in ContractDetails.objects.all()],
-                "activeContractId": AppState.get().active_contract_id,
-                "aiAvailable": gemini.is_ai_available(),
-            }
-        )
+            profiles = Profile.objects.select_related("user", "contract").all()
+            return Response(
+                {
+                    "users": [serialize_user(p) for p in profiles],
+                    "sessions": [serialize_session(s) for s in Session.objects.prefetch_related("chat_messages").all()],
+                    "transactions": [serialize_transaction(t) for t in Transaction.objects.select_related("user__profile").all()],
+                    "availabilities": [
+                        serialize_availability(a)
+                        for a in InterpreterAvailability.objects.select_related("interpreter__profile").all()
+                    ],
+                    "auditLogs": [serialize_audit_log(l) for l in AuditLog.objects.all()[:50]],
+                    "clientWalletBalance": get_wallet_balance(),
+                    "contractDetails": serialize_contract(contract) if contract else None,
+                    "contractsList": [serialize_contract(c) for c in ContractDetails.objects.all()],
+                    "activeContractId": AppState.get().active_contract_id,
+                    "aiAvailable": gemini.is_ai_available(),
+                }
+            )
+        except Exception:
+            logger.exception("InitView failed")
+            return Response(
+                {"error": "Could not load application state."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class SessionsListView(APIView):
@@ -389,6 +398,7 @@ class SessionAcceptView(APIView):
         try:
             result = call_state.accept_call(session_id, interpreter_id, interpreter_name)
         except Exception:
+            logger.exception("SessionAcceptView failed for session %s", session_id)
             return Response(
                 {"error": "Could not accept call due to a server error."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
