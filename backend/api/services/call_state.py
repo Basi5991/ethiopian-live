@@ -240,7 +240,6 @@ def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: s
             session = (
                 Session.objects.select_for_update()
                 .select_related("client__profile", "interpreter__profile")
-                .prefetch_related("chat_messages")
                 .get(pk=session_id)
             )
         except Session.DoesNotExist:

@@ -386,11 +386,23 @@ class SessionAcceptView(APIView):
         from api.services import call_state
         from api.ws_notify import notify_call_accepted
 
-        result = call_state.accept_call(session_id, interpreter_id, interpreter_name)
+        try:
+            result = call_state.accept_call(session_id, interpreter_id, interpreter_name)
+        except Exception:
+            return Response(
+                {"error": "Could not accept call due to a server error."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         if not result.ok:
             return Response({"error": result.error}, status=result.status)
 
-        notify_call_accepted(result.session, result.client_id, result.target_interpreter_id)
+        try:
+            notify_call_accepted(result.session, result.client_id, result.target_interpreter_id)
+        except Exception:
+            # Accept succeeded; websocket fan-out is best-effort.
+            pass
+
         return Response({"success": True, "session": result.session})
 
 
