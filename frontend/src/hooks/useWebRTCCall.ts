@@ -34,30 +34,58 @@ function hasSessionDescription(payload: unknown): payload is RTCSessionDescripti
 }
 
 function hasIceCandidate(payload: unknown): payload is RTCIceCandidateInit {
-  return Boolean(payload && typeof payload === "object" && "candidate" in payload);
+  return Boolean(
+    payload &&
+      typeof payload === "object" &&
+      "candidate" in payload &&
+      typeof (payload as RTCIceCandidateInit).candidate === "string" &&
+      (payload as RTCIceCandidateInit).candidate
+  );
 }
 
-/** Acquire video and audio — combined first, then split fallbacks. */
+/** Acquire microphone first, then camera — audio must not fail when video is busy. */
 export async function acquireCallMedia(options: { preferVideo?: boolean } = {}): Promise<MediaStream> {
   const { preferVideo = true } = options;
+  const stream = new MediaStream();
 
-  const attempts: MediaStreamConstraints[] = preferVideo
-    ? [
-        { audio: { echoCancellation: true, noiseSuppression: true }, video: true },
-        { audio: { echoCancellation: true, noiseSuppression: true }, video: { width: { ideal: 640 }, height: { ideal: 480 } } },
-        { audio: true, video: false },
-      ]
-    : [{ audio: { echoCancellation: true, noiseSuppression: true }, video: false }];
+  const audioAttempts: MediaStreamConstraints[] = [
+    { audio: { echoCancellation: true, noiseSuppression: true }, video: false },
+    { audio: true, video: false },
+  ];
 
-  for (const constraints of attempts) {
+  let gotAudio = false;
+  for (const constraints of audioAttempts) {
     try {
-      return await navigator.mediaDevices.getUserMedia(constraints);
+      const audioOnly = await navigator.mediaDevices.getUserMedia(constraints);
+      audioOnly.getAudioTracks().forEach((track) => stream.addTrack(track));
+      gotAudio = true;
+      break;
     } catch {
-      /* try next */
+      /* try simpler audio constraints */
     }
   }
 
-  throw new Error("Could not access camera/microphone.");
+  if (!gotAudio) {
+    throw new Error("Could not access microphone.");
+  }
+
+  if (preferVideo) {
+    const videoAttempts: MediaStreamConstraints[] = [
+      { video: true, audio: false },
+      { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
+    ];
+    for (const constraints of videoAttempts) {
+      try {
+        const videoOnly = await navigator.mediaDevices.getUserMedia(constraints);
+        videoOnly.getVideoTracks().forEach((track) => stream.addTrack(track));
+        break;
+      } catch {
+        /* audio-only call is still valid */
+      }
+    }
+  }
+
+  return stream;
 }
 
 /** @deprecated Use acquireCallMedia — kept for imports that expect the old name. */
@@ -111,6 +139,7 @@ export function useWebRTCCall({
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const processedIdsRef = useRef<Set<string>>(new Set());
   const pendingSignalsRef = useRef<WebRTCSignalMessage[]>([]);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
@@ -121,6 +150,7 @@ export function useWebRTCCall({
   const endedSessionsRef = useRef<Set<string>>(new Set());
   const sdpChainRef = useRef(Promise.resolve());
   const callLiveNotifiedRef = useRef(false);
+  const calleeRenegotiatedRef = useRef(false);
   const localMediaReadyRef = useRef<{
     promise: Promise<void>;
     resolve: () => void;
@@ -129,6 +159,7 @@ export function useWebRTCCall({
   const onPeerHangupRef = useRef(onPeerHangup);
   const onCallLiveRef = useRef(onCallLive);
   const bindVideoElementsRef = useRef<() => void>(() => {});
+  const syncRemoteReceiversRef = useRef<(pc: RTCPeerConnection) => void>(() => {});
   const pollPeerSignalsRef = useRef<(() => Promise<void>) | null>(null);
   const handleSignalRef = useRef<(signal: WebRTCSignalMessage) => Promise<void>>(async () => {});
 
@@ -174,6 +205,17 @@ export function useWebRTCCall({
         .then(() => setPlaybackBlocked(false))
         .catch(() => setPlaybackBlocked(true));
     }
+
+    if (remoteAudioRef.current && remoteStream) {
+      if (remoteAudioRef.current.srcObject !== remoteStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+      }
+      remoteAudioRef.current.muted = false;
+      void remoteAudioRef.current
+        .play()
+        .then(() => setPlaybackBlocked(false))
+        .catch(() => setPlaybackBlocked(true));
+    }
   }, []);
 
   bindVideoElementsRef.current = bindVideoElements;
@@ -190,10 +232,28 @@ export function useWebRTCCall({
 
   const setRemoteStream = useCallback((stream: MediaStream) => {
     remoteStreamRef.current = stream;
-    setRemoteReady(true);
+    setRemoteReady(stream.getTracks().some((track) => track.readyState === "live"));
     setVideoBindTick((n) => n + 1);
     bindVideoElementsRef.current();
   }, []);
+
+  const syncRemoteReceivers = useCallback(
+    (pc: RTCPeerConnection) => {
+      let stream = remoteStreamRef.current ?? new MediaStream();
+      for (const receiver of pc.getReceivers()) {
+        const track = receiver.track;
+        if (track && track.readyState === "live") {
+          stream = mergeRemoteTrack(stream, track);
+        }
+      }
+      if (stream.getTracks().length > 0) {
+        setRemoteStream(stream);
+      }
+    },
+    [setRemoteStream]
+  );
+
+  syncRemoteReceiversRef.current = syncRemoteReceivers;
 
   const postSignal = useCallback((signalType: WebRTCSignalMessage["signalType"], payload: unknown) => {
     const sid = sessionIdRef.current;
@@ -234,23 +294,26 @@ export function useWebRTCCall({
       if (pc.signalingState !== "have-local-offer") return;
       await pc.setRemoteDescription(new RTCSessionDescription(answer));
       await flushPendingIce(pc);
+      syncRemoteReceiversRef.current(pc);
       bindVideoElementsRef.current();
       notifyCallLive();
     },
     [flushPendingIce, notifyCallLive]
   );
 
-  const sendCalleeRenegotiationOffer = useCallback(
+  const maybeRenegotiateCallee = useCallback(
     async (pc: RTCPeerConnection) => {
-      if (isCallerRef.current || hasLocalSenders(pc)) return;
-
+      if (isCallerRef.current || calleeRenegotiatedRef.current) return;
       await localMediaReadyRef.current?.promise;
+
       const localStream = localStreamRef.current;
       if (!localStream) return;
 
       attachLocalTracks(pc, localStream);
       if (!hasLocalSenders(pc)) return;
+      if (pc.signalingState !== "stable") return;
 
+      calleeRenegotiatedRef.current = true;
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -258,7 +321,7 @@ export function useWebRTCCall({
           postSignal("offer", pc.localDescription.toJSON());
         }
       } catch {
-        /* retry when media arrives */
+        calleeRenegotiatedRef.current = false;
       }
     },
     [postSignal]
@@ -279,6 +342,7 @@ export function useWebRTCCall({
       if (pc.localDescription) {
         postSignal("answer", pc.localDescription.toJSON());
       }
+      syncRemoteReceiversRef.current(pc);
     },
     [flushPendingIce, postSignal]
   );
@@ -288,13 +352,26 @@ export function useWebRTCCall({
       if (pc.localDescription?.type === "answer") return;
 
       const remoteSdp = pc.remoteDescription?.sdp;
-      if (remoteSdp && remoteSdp === offer.sdp) return;
+      if (remoteSdp && remoteSdp === offer.sdp) {
+        if (pc.signalingState === "have-remote-offer" || pc.signalingState === "have-local-pranswer") {
+          await localMediaReadyRef.current?.promise;
+          const localStream = localStreamRef.current;
+          if (localStream) attachLocalTracks(pc, localStream);
+          if (pc.signalingState === "have-remote-offer" && !pc.localDescription) {
+            await flushPendingIce(pc);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            if (pc.localDescription) postSignal("answer", pc.localDescription.toJSON());
+          }
+        }
+        return;
+      }
 
       if (pc.signalingState === "have-local-offer") {
         await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
       }
 
-      if (pc.signalingState === "stable") {
+      if (!pc.remoteDescription || pc.remoteDescription.sdp !== offer.sdp) {
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
       }
 
@@ -315,12 +392,13 @@ export function useWebRTCCall({
       if (pc.localDescription) {
         postSignal("answer", pc.localDescription.toJSON());
       }
+      syncRemoteReceiversRef.current(pc);
 
       if (!hasLocalSenders(pc)) {
-        void sendCalleeRenegotiationOffer(pc);
+        void maybeRenegotiateCallee(pc);
       }
     },
-    [flushPendingIce, postSignal, sendCalleeRenegotiationOffer]
+    [flushPendingIce, maybeRenegotiateCallee, postSignal]
   );
 
   const handleSignal = useCallback(
@@ -433,10 +511,12 @@ export function useWebRTCCall({
     pendingSignalsRef.current = [];
     processedIdsRef.current.clear();
     callLiveNotifiedRef.current = false;
+    calleeRenegotiatedRef.current = false;
     localMediaReadyRef.current = null;
     sdpChainRef.current = Promise.resolve();
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
     setLocalReady(false);
     setRemoteReady(false);
     setPlaybackBlocked(false);
@@ -467,7 +547,7 @@ export function useWebRTCCall({
 
   const resumeRemoteMedia = useCallback(async () => {
     try {
-      await remoteVideoRef.current?.play();
+      await Promise.all([remoteVideoRef.current?.play(), remoteAudioRef.current?.play()]);
       setPlaybackBlocked(false);
     } catch {
       setPlaybackBlocked(true);
@@ -539,26 +619,28 @@ export function useWebRTCCall({
         const pc = new RTCPeerConnection(ICE_SERVERS);
         pcRef.current = pc;
 
-        pc.ontrack = (event) => {
-          let stream = remoteStreamRef.current ?? event.streams[0] ?? new MediaStream();
-          stream = mergeRemoteTrack(stream, event.track);
-          if (event.streams[0]) {
-            for (const track of event.streams[0].getTracks()) {
-              stream = mergeRemoteTrack(stream, track);
-            }
-          }
-          setRemoteStream(stream);
+        pc.ontrack = () => {
+          syncRemoteReceiversRef.current(pc);
         };
 
         pc.onicecandidate = (event) => {
-          if (event.candidate) {
+          if (event.candidate?.candidate) {
             postSignal("ice", event.candidate.toJSON());
+          }
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+            syncRemoteReceiversRef.current(pc);
+            bindVideoElementsRef.current();
+            notifyCallLive();
           }
         };
 
         pc.onconnectionstatechange = () => {
           setConnectionState(pc.connectionState);
           if (pc.connectionState === "connected") {
+            syncRemoteReceiversRef.current(pc);
             bindVideoElementsRef.current();
             notifyCallLive();
           }
@@ -566,6 +648,9 @@ export function useWebRTCCall({
 
         if (isCallerRef.current) {
           attachLocalTracks(pc, stream);
+          if (!stream.getAudioTracks().some((track) => track.readyState === "live")) {
+            throw new Error("Microphone is unavailable for this call.");
+          }
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           if (pc.localDescription) {
@@ -631,7 +716,7 @@ export function useWebRTCCall({
     if (!enabled || !sessionId || !pc || !initialStream) return;
     if (localStreamRef.current === initialStream) {
       attachLocalTracks(pc, initialStream);
-      void sendCalleeRenegotiationOffer(pc);
+      void maybeRenegotiateCallee(pc);
       return;
     }
     localStreamRef.current = initialStream;
@@ -639,12 +724,13 @@ export function useWebRTCCall({
     setLocalReady(true);
     attachLocalTracks(pc, initialStream);
     bindVideoElementsRef.current();
-    void sendCalleeRenegotiationOffer(pc);
-  }, [enabled, initialStream, sendCalleeRenegotiationOffer, sessionId]);
+    void maybeRenegotiateCallee(pc);
+  }, [enabled, initialStream, maybeRenegotiateCallee, sessionId]);
 
   return {
     localVideoRef,
     remoteVideoRef,
+    remoteAudioRef,
     connectionState,
     mediaError,
     localReady,

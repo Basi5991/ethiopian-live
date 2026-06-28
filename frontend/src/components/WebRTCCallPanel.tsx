@@ -40,6 +40,7 @@ export default function WebRTCCallPanel({
   const {
     localVideoRef,
     remoteVideoRef,
+    remoteAudioRef,
     connectionState,
     mediaError,
     localReady,
@@ -128,6 +129,7 @@ export default function WebRTCCallPanel({
             {remoteLabel}
           </span>
           <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />
+          <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" aria-hidden="true" />
           {!remoteReady && (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-xs gap-2 bg-black/50">
               <RefreshCw className="w-5 h-5 animate-spin opacity-60" />
