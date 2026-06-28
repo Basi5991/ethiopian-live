@@ -245,14 +245,24 @@ export default function ClientDashboard({
       ? activeSession
       : liveClientSession;
   const hasOverlappingCall = Boolean(blockingSession);
+  const callIsLive = isCallLive(activeSession);
 
   useEffect(() => {
     return callSocket.subscribe((message) => {
       if (message.type === "call.created" || message.type === "call.ringing" || message.type === "call.accepted") {
         setDismissedSessionId(null);
-        setActiveSession((prev) =>
-          mergeLiveSession(prev, message.type === "call.accepted" ? { ...message.session, status: "active" } : message.session)
-        );
+        if (message.type === "call.accepted") {
+          setActiveSession((prev) =>
+            mergeLiveSession(prev, {
+              ...message.session,
+              status: "active",
+              interpreterId: message.session.interpreterId,
+              interpreterName: message.session.interpreterName || prev?.interpreterName,
+            })
+          );
+        } else {
+          setActiveSession((prev) => mergeLiveSession(prev, message.session));
+        }
         setIsSubmitting(false);
         onActionComplete();
       } else if (message.type === "call.ended") {
@@ -336,27 +346,27 @@ export default function ClientDashboard({
 
   // Outgoing Dialing Ringer Loop — stop as soon as the call is live (accepted)
   useEffect(() => {
-    let intervalId: any;
-    if (activeSession && !isCallLive(activeSession)) {
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    if (activeSession && !callIsLive) {
       playRingTone();
       intervalId = setInterval(playRingTone, 4000);
     }
     return () => {
       if (intervalId) clearInterval(intervalId);
     };
-  }, [activeSession?.status, activeSession?.interpreterId, activeSession?.id]);
+  }, [activeSession?.id, callIsLive]);
 
   useEffect(() => {
-    if (!activeSession || isCallLive(activeSession)) return;
+    if (!activeSession || callIsLive) return;
     const refreshId = window.setInterval(() => {
       onActionComplete();
     }, 1000);
     return () => window.clearInterval(refreshId);
-  }, [activeSession?.status, activeSession?.interpreterId, activeSession?.id, onActionComplete]);
+  }, [activeSession?.id, callIsLive, onActionComplete]);
 
   // Promote to active when poller sees the interpreter accepted on the server
   useEffect(() => {
-    if (!activeSession?.id || isCallLive(activeSession)) return;
+    if (!activeSession?.id || callIsLive) return;
     const match = sessions.find((s) => s.id === activeSession.id);
     if (match && isCallLive(match)) {
       setActiveSession((prev) => mergeLiveSession(prev, match));

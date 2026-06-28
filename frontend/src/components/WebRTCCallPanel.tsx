@@ -64,7 +64,7 @@ export default function WebRTCCallPanel({
     connectionState === "connected" ||
     connectionState === "connecting" ||
     remoteReady;
-  const isRinging = status === "incoming" && isCaller && !isConnected;
+  const isRinging = isCaller && status !== "active" && !isConnected;
   const isWaitingForPeer = !isCaller && status === "active" && !isConnected;
 
   return (

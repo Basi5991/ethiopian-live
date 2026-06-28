@@ -171,6 +171,7 @@ export function useWebRTCCall({
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const offerRepublishTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollPeerSignalsRef = useRef<(() => Promise<void>) | null>(null);
   const signalSocketRef = useRef<ReturnType<typeof getCallSocket> | null>(null);
   const mountGenRef = useRef(0);
   const ownsLocalStreamRef = useRef(false);
@@ -282,6 +283,7 @@ export function useWebRTCCall({
 
   const attachRemoteTrack = useCallback(
     (track: MediaStreamTrack) => {
+      if (track.readyState === "ended") return;
       if (!remoteStreamRef.current) {
         remoteStreamRef.current = new MediaStream();
       }
@@ -405,6 +407,10 @@ export function useWebRTCCall({
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
           await flushPendingIce(pc);
+          setRemoteReady(Boolean(remoteStreamRef.current?.getTracks().length));
+          setVideoBindTick((n) => n + 1);
+          bindVideoElements();
+          void pollPeerSignalsRef.current?.();
           setMediaError(null);
         } catch (err) {
           const message = err instanceof Error ? err.message : "WebRTC answer negotiation failed.";
@@ -431,7 +437,7 @@ export function useWebRTCCall({
         onPeerHangupRef.current?.(sid || "");
       }
     },
-    [acceptOfferAndAnswer, flushPendingIce, teardownMedia]
+    [acceptOfferAndAnswer, flushPendingIce, teardownMedia, bindVideoElements]
   );
 
   const ingestRemoteSignal = useCallback(
@@ -474,6 +480,8 @@ export function useWebRTCCall({
     }
   }, [ingestRemoteSignal]);
 
+  pollPeerSignalsRef.current = pollPeerSignals;
+
   const endCall = useCallback(async () => {
     const sid = sessionIdRef.current;
     if (sid) {
@@ -484,22 +492,22 @@ export function useWebRTCCall({
   }, [postSignal, teardownMedia]);
 
   useEffect(() => {
-    if (!enabled || !sessionId || !isCaller) return;
+    if (!enabled || !sessionId) return;
 
     const socket = getCallSocket(getCurrentUserIdForSocket(role), role);
     const unsubscribe = socket.subscribe((message) => {
       if (message.type !== "call.accepted") return;
       if (!("session" in message) || message.session?.id !== sessionId) return;
 
+      void pollPeerSignalsRef.current?.();
       const pc = pcRef.current;
-      if (pc?.localDescription?.type === "offer") {
+      if (isCallerRef.current && pc?.localDescription?.type === "offer") {
         postSignal("offer", pc.localDescription.toJSON());
-        void pollPeerSignals();
       }
     });
 
     return unsubscribe;
-  }, [enabled, sessionId, isCaller, role, postSignal, pollPeerSignals]);
+  }, [enabled, sessionId, role, postSignal]);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -558,6 +566,12 @@ export function useWebRTCCall({
         await configureOrderedLocalMedia(pc, stream);
 
         pc.ontrack = (event) => {
+          if (event.streams?.[0]) {
+            for (const track of event.streams[0].getTracks()) {
+              attachRemoteTrack(track);
+            }
+            return;
+          }
           attachRemoteTrack(event.track);
         };
 
@@ -572,9 +586,15 @@ export function useWebRTCCall({
         };
 
         pc.oniceconnectionstatechange = () => {
-          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-            setRemoteReady(true);
-            setVideoBindTick((n) => n + 1);
+          if (
+            pc.iceConnectionState === "connected" ||
+            pc.iceConnectionState === "completed"
+          ) {
+            if (remoteStreamRef.current?.getTracks().length) {
+              setRemoteReady(true);
+              setVideoBindTick((n) => n + 1);
+              bindVideoElements();
+            }
           }
         };
 

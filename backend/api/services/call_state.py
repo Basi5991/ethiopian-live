@@ -278,7 +278,6 @@ def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: s
             sender_name="System",
             text=f"Interpreter {session.interpreter_name} accepted the session. Video line open.",
         )
-        WebRTCSignal.objects.filter(session=session).delete()
 
     session = Session.objects.prefetch_related("chat_messages").select_related("client__profile", "interpreter__profile").get(
         pk=session_id
