@@ -185,6 +185,19 @@ class SessionsListView(APIView):
         return Response([serialize_session(s) for s in sessions])
 
 
+class SessionDetailView(APIView):
+    """Lightweight session lookup for call-state polling."""
+
+    def get(self, request, session_id):
+        try:
+            session = Session.objects.prefetch_related("chat_messages").select_related(
+                "client__profile", "interpreter__profile"
+            ).get(pk=session_id)
+        except Session.DoesNotExist:
+            return Response({"error": "Session not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"session": serialize_session(session)})
+
+
 class SessionRequestView(APIView):
     def post(self, request):
         client_id = request.data.get("clientId")

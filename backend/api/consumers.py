@@ -152,8 +152,13 @@ class CallConsumer(JsonWebsocketConsumer):
             "payload": signal.payload,
         }
         if sender_role == "client":
-            interpreter_id = session.interpreter.profile.external_id if session.interpreter and hasattr(session.interpreter, "profile") else None
-            self._send_user(interpreter_id, outbound)
+            interpreter_id = None
+            if session.interpreter and hasattr(session.interpreter, "profile"):
+                interpreter_id = session.interpreter.profile.external_id
+            if interpreter_id:
+                self._send_user(interpreter_id, outbound)
+            else:
+                broadcast_to_interpreters(outbound)
         else:
             client_id = session.client.profile.external_id if hasattr(session.client, "profile") else None
             self._send_user(client_id, outbound)

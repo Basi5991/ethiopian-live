@@ -15,7 +15,10 @@ def spa_index(_request):
             status=503,
             content_type="text/plain",
         )
-    return FileResponse(index_path.open("rb"), content_type="text/html")
+    response = FileResponse(index_path.open("rb"), content_type="text/html")
+    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response["Pragma"] = "no-cache"
+    return response
 
 
 def spa_asset(request, path: str):

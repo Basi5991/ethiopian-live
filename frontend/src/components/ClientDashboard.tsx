@@ -373,6 +373,32 @@ export default function ClientDashboard({
     }
   }, [sessions, activeSession?.id, activeSession?.status, activeSession?.interpreterId]);
 
+  // Poll session status directly so ringing stops even if WebSocket accept is delayed
+  useEffect(() => {
+    if (!activeSession?.id || callIsLive) return;
+    let cancelled = false;
+
+    const pollSession = async () => {
+      try {
+        const res = await fetch(apiUrl(`/api/sessions/${activeSession.id}`));
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { session?: Session };
+        if (data.session && isCallLive(data.session)) {
+          setActiveSession((prev) => mergeLiveSession(prev, data.session!));
+        }
+      } catch {
+        /* retry on next interval */
+      }
+    };
+
+    void pollSession();
+    const pollId = window.setInterval(pollSession, 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+    };
+  }, [activeSession?.id, callIsLive]);
+
   useEffect(() => {
     if (contractDetails) {
       setExtBillingCode(contractDetails.billingCode);

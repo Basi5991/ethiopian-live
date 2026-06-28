@@ -12,11 +12,32 @@ export interface WebRTCSignalMessage {
   createdAt: string;
 }
 
+const STUN_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+];
+
+/** Public TURN relay — required for many real-world NAT/firewall paths on HTTPS production. */
+const PRODUCTION_TURN_SERVERS: RTCIceServer[] = [
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
+
 const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-  ],
+  iceServers: import.meta.env.PROD ? [...STUN_SERVERS, ...PRODUCTION_TURN_SERVERS] : STUN_SERVERS,
 };
 
 function hasSessionDescription(payload: unknown): payload is RTCSessionDescriptionInit {
@@ -91,37 +112,13 @@ interface UseWebRTCCallOptions {
   onPeerHangup?: (sessionId: string) => void;
 }
 
-function getOrderedTransceiver(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpTransceiver | null {
-  const index = kind === "audio" ? 0 : 1;
-  return pc.getTransceivers()[index] ?? null;
-}
-
-function getTransceiverSender(pc: RTCPeerConnection, kind: "audio" | "video"): RTCRtpSender | null {
-  return getOrderedTransceiver(pc, kind)?.sender ?? null;
-}
-
-async function configureOrderedLocalMedia(pc: RTCPeerConnection, stream: MediaStream) {
-  // Caller offer m-lines must stay audio first, then video.
-  if (pc.getTransceivers().length === 0) {
-    pc.addTransceiver("audio", { direction: "sendrecv" });
-    pc.addTransceiver("video", { direction: "sendrecv" });
-  }
-  await attachLocalTracksToOfferTransceivers(pc, stream);
-}
-
-async function attachLocalTracksToOfferTransceivers(pc: RTCPeerConnection, stream: MediaStream) {
-  const audioTrack = stream.getAudioTracks().find((track) => track.readyState === "live") || null;
-  const videoTrack = stream.getVideoTracks().find((track) => track.readyState === "live") || null;
-  const audioTransceiver = getOrderedTransceiver(pc, "audio");
-  const videoTransceiver = getOrderedTransceiver(pc, "video");
-
-  if (audioTransceiver) {
-    audioTransceiver.direction = "sendrecv";
-    await audioTransceiver.sender.replaceTrack(audioTrack);
-  }
-  if (videoTransceiver) {
-    videoTransceiver.direction = "sendrecv";
-    await videoTransceiver.sender.replaceTrack(videoTrack);
+function attachLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {
+  for (const track of stream.getTracks()) {
+    if (track.readyState !== "live") continue;
+    const alreadyAttached = pc.getSenders().some((sender) => sender.track?.id === track.id);
+    if (!alreadyAttached) {
+      pc.addTrack(track, stream);
+    }
   }
 }
 
@@ -140,11 +137,8 @@ async function tryAddVideoTrack(stream: MediaStream, pc: RTCPeerConnection): Pro
       const videoTrack = videoStream.getVideoTracks()[0];
       if (!videoTrack) continue;
       stream.addTrack(videoTrack);
-      const videoSender = getTransceiverSender(pc, "video");
-      if (videoSender) {
-        await videoSender.replaceTrack(videoTrack);
-      }
-      return Boolean(videoSender);
+      attachLocalStreamToPeerConnection(pc, stream);
+      return true;
     } catch {
       /* try next */
     }
@@ -269,7 +263,7 @@ export function useWebRTCCall({
       const localStream = localStreamRef.current;
       if (localStream) {
         await tryAddVideoTrack(localStream, pc);
-        await attachLocalTracksToOfferTransceivers(pc, localStream);
+        attachLocalStreamToPeerConnection(pc, localStream);
       }
       await flushPendingIce(pc);
       const answer = await pc.createAnswer();
@@ -284,6 +278,8 @@ export function useWebRTCCall({
   const attachRemoteTrack = useCallback(
     (track: MediaStreamTrack) => {
       if (track.readyState === "ended") return;
+      const localStream = localStreamRef.current;
+      if (localStream?.getTracks().some((t) => t.id === track.id)) return;
       if (!remoteStreamRef.current) {
         remoteStreamRef.current = new MediaStream();
       }
@@ -305,7 +301,7 @@ export function useWebRTCCall({
       try {
         const stream = localStreamRef.current;
         if (stream) {
-          await attachLocalTracksToOfferTransceivers(pc, stream);
+          attachLocalStreamToPeerConnection(pc, stream);
         }
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
@@ -391,9 +387,11 @@ export function useWebRTCCall({
           if (pc.signalingState === "stable") {
             await acceptOfferAndAnswer(pc, signal.payload);
           } else if (pc.signalingState === "have-local-offer" && isCallerRef.current) {
-            // Roll back our offer and accept the remote one (glare handling)
             await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
             await acceptOfferAndAnswer(pc, signal.payload);
+          } else if (pc.signalingState === "have-local-answer" && !isCallerRef.current) {
+            /* duplicate offer after answer was sent — ignore */
+            return;
           }
           setMediaError(null);
         } catch (err) {
@@ -401,7 +399,8 @@ export function useWebRTCCall({
           setMediaError(message);
         }
       } else if (signal.signalType === "answer" && isCallerRef.current) {
-        if (pc.signalingState !== "have-local-offer" || !hasSessionDescription(signal.payload)) {
+        if (!hasSessionDescription(signal.payload)) return;
+        if (pc.signalingState !== "have-local-offer" && pc.signalingState !== "have-remote-offer") {
           return;
         }
         try {
@@ -498,16 +497,11 @@ export function useWebRTCCall({
     const unsubscribe = socket.subscribe((message) => {
       if (message.type !== "call.accepted") return;
       if (!("session" in message) || message.session?.id !== sessionId) return;
-
       void pollPeerSignalsRef.current?.();
-      const pc = pcRef.current;
-      if (isCallerRef.current && pc?.localDescription?.type === "offer") {
-        postSignal("offer", pc.localDescription.toJSON());
-      }
     });
 
     return unsubscribe;
-  }, [enabled, sessionId, role, postSignal]);
+  }, [enabled, sessionId, role]);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -563,7 +557,6 @@ export function useWebRTCCall({
 
         const pc = new RTCPeerConnection(ICE_SERVERS);
         pcRef.current = pc;
-        await configureOrderedLocalMedia(pc, stream);
 
         pc.ontrack = (event) => {
           if (event.streams?.[0]) {
@@ -599,6 +592,7 @@ export function useWebRTCCall({
         };
 
         if (isCallerRef.current) {
+          attachLocalStreamToPeerConnection(pc, stream);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           if (pc.localDescription) {

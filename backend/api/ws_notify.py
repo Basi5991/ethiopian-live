@@ -65,7 +65,10 @@ def broadcast_webrtc_signal(session, signal, sender_role: str) -> None:
         interpreter_id = None
         if session.interpreter and hasattr(session.interpreter, "profile"):
             interpreter_id = session.interpreter.profile.external_id
-        broadcast_to_user(interpreter_id, outbound)
+        if interpreter_id:
+            broadcast_to_user(interpreter_id, outbound)
+        else:
+            broadcast_to_interpreters(outbound)
     else:
         client_id = session.client.profile.external_id if hasattr(session.client, "profile") else None
         broadcast_to_user(client_id, outbound)

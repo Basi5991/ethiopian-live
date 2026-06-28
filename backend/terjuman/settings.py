@@ -158,3 +158,9 @@ if not DEBUG:
     extra_origins = os.getenv("CSRF_TRUSTED_ORIGINS", "")
     if extra_origins:
         CSRF_TRUSTED_ORIGINS.extend(o.strip() for o in extra_origins.split(",") if o.strip())
+    for host in ALLOWED_HOSTS:
+        if host.startswith(".") or host in ("localhost", "127.0.0.1"):
+            continue
+        origin = f"https://{host}"
+        if origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(origin)

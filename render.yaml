@@ -24,6 +24,8 @@ services:
         value: "False"
       - key: ALLOWED_HOSTS
         value: "elliot-live.onrender.com,.onrender.com,localhost,127.0.0.1"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://elliot-live.onrender.com"
       - key: SECRET_KEY
         generateValue: true
       - key: DATABASE_URL

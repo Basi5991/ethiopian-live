@@ -13,6 +13,7 @@ urlpatterns = [
     path("sessions/<str:session_id>/chat", views.SessionChatView.as_view()),
     path("sessions/<str:session_id>/complete", views.SessionCompleteView.as_view()),
     path("sessions/<str:session_id>/intervene", views.SessionInterveneView.as_view()),
+    path("sessions/<str:session_id>", views.SessionDetailView.as_view()),
     path("calls/dial", views.CallDialView.as_view()),
     path("wallet/deposit", views.WalletDepositView.as_view()),
     path("wallet/payout", views.WalletPayoutView.as_view()),
