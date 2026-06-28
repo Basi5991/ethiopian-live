@@ -110,6 +110,8 @@ interface UseWebRTCCallOptions {
   enabled: boolean;
   initialStream?: MediaStream | null;
   onPeerHangup?: (sessionId: string) => void;
+  /** Fired once media path is up (answer applied or ICE connected). */
+  onCallLive?: () => void;
 }
 
 function attachLocalStreamToPeerConnection(pc: RTCPeerConnection, stream: MediaStream) {
@@ -154,6 +156,7 @@ export function useWebRTCCall({
   enabled,
   initialStream = null,
   onPeerHangup,
+  onCallLive,
 }: UseWebRTCCallOptions) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -174,6 +177,8 @@ export function useWebRTCCall({
   const sdpChainRef = useRef(Promise.resolve());
   const endedSessionsRef = useRef<Set<string>>(new Set());
   const onPeerHangupRef = useRef<((sessionId: string) => void) | undefined>(undefined);
+  const onCallLiveRef = useRef<(() => void) | undefined>(undefined);
+  const callLiveNotifiedRef = useRef(false);
 
   const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>("new");
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -193,6 +198,13 @@ export function useWebRTCCall({
   isCallerRef.current = isCaller;
   initialStreamRef.current = initialStream;
   onPeerHangupRef.current = onPeerHangup;
+  onCallLiveRef.current = onCallLive;
+
+  const notifyCallLive = useCallback(() => {
+    if (callLiveNotifiedRef.current) return;
+    callLiveNotifiedRef.current = true;
+    onCallLiveRef.current?.();
+  }, []);
 
   const bindVideoElements = useCallback(() => {
     const localStream = localStreamRef.current;
@@ -285,7 +297,7 @@ export function useWebRTCCall({
         }
 
         const stateAfterRollback = pc.signalingState;
-        if (pc.localDescription?.type === "answer") return;
+        if ((pc.localDescription?.type as string | undefined) === "answer") return;
 
         if (stateAfterRollback === "stable") {
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -302,11 +314,12 @@ export function useWebRTCCall({
         if (pc.localDescription) {
           postSignal("answer", pc.localDescription.toJSON());
         }
+        notifyCallLive();
       } finally {
         negotiatingRef.current = false;
       }
     },
-    [flushPendingIce, postSignal]
+    [flushPendingIce, postSignal, notifyCallLive]
   );
 
   const attachRemoteTrack = useCallback(
@@ -321,11 +334,27 @@ export function useWebRTCCall({
       if (!remote.getTracks().some((t) => t.id === track.id)) {
         remote.addTrack(track);
       }
+      track.onunmute = () => {
+        setVideoBindTick((n) => n + 1);
+        bindVideoElements();
+      };
       setRemoteReady(true);
       setVideoBindTick((n) => n + 1);
       bindVideoElements();
+      notifyCallLive();
     },
-    [bindVideoElements]
+    [bindVideoElements, notifyCallLive]
+  );
+
+  const syncRemoteReceivers = useCallback(
+    (pc: RTCPeerConnection) => {
+      for (const receiver of pc.getReceivers()) {
+        if (receiver.track) {
+          attachRemoteTrack(receiver.track);
+        }
+      }
+    },
+    [attachRemoteTrack]
   );
 
   const sendRenegotiationOffer = useCallback(
@@ -383,6 +412,7 @@ export function useWebRTCCall({
     pendingIceRef.current = [];
     pendingSignalsRef.current = [];
     processedIdsRef.current.clear();
+    callLiveNotifiedRef.current = false;
     setLocalReady(false);
     setRemoteReady(false);
     setPlaybackBlocked(false);
@@ -456,10 +486,12 @@ export function useWebRTCCall({
 
           try {
             await activePc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+            syncRemoteReceivers(activePc);
             await flushPendingIce(activePc);
             setRemoteReady(Boolean(remoteStreamRef.current?.getTracks().length));
             setVideoBindTick((n) => n + 1);
             bindVideoElements();
+            notifyCallLive();
             void pollPeerSignalsRef.current?.();
             setMediaError(null);
           } catch (err) {
@@ -488,7 +520,7 @@ export function useWebRTCCall({
         onPeerHangupRef.current?.(sid || "");
       }
     },
-    [acceptOfferAndAnswer, enqueueSdpWork, flushPendingIce, teardownMedia, bindVideoElements]
+    [acceptOfferAndAnswer, enqueueSdpWork, flushPendingIce, teardownMedia, bindVideoElements, syncRemoteReceivers, notifyCallLive]
   );
 
   const ingestRemoteSignal = useCallback(
@@ -628,6 +660,11 @@ export function useWebRTCCall({
 
         pc.onconnectionstatechange = () => {
           setConnectionState(pc.connectionState);
+          if (pc.connectionState === "connected") {
+            syncRemoteReceivers(pc);
+            bindVideoElements();
+            notifyCallLive();
+          }
         };
 
         pc.oniceconnectionstatechange = () => {
@@ -635,15 +672,18 @@ export function useWebRTCCall({
             pc.iceConnectionState === "connected" ||
             pc.iceConnectionState === "completed"
           ) {
+            syncRemoteReceivers(pc);
             if (remoteStreamRef.current?.getTracks().length) {
               setRemoteReady(true);
               setVideoBindTick((n) => n + 1);
               bindVideoElements();
             }
+            notifyCallLive();
           }
         };
 
         if (isCallerRef.current) {
+          await tryAddVideoTrack(stream, pc);
           attachLocalStreamToPeerConnection(pc, stream);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);

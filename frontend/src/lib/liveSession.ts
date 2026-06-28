@@ -16,11 +16,15 @@ export function mergeLiveSession(prev: Session | null, next: Session | null): Se
 
   const prevRank = SESSION_STATUS_RANK[prev.status] ?? 99;
   const nextRank = SESSION_STATUS_RANK[next.status] ?? 99;
-  const status = prevRank <= nextRank ? prev.status : next.status;
 
   return {
     ...next,
-    status,
+    status:
+      next.status === "active" || next.interpreterId
+        ? "active"
+        : prevRank <= nextRank
+          ? prev.status
+          : next.status,
     interpreterId: next.interpreterId || prev.interpreterId,
     interpreterName: next.interpreterName || prev.interpreterName,
     chatMessages: next.chatMessages?.length ? next.chatMessages : prev.chatMessages,

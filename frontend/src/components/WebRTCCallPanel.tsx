@@ -15,6 +15,7 @@ interface WebRTCCallPanelProps {
   remoteLabel: string;
   onEndCall: () => void | Promise<void>;
   onPeerHangup?: (sessionId: string) => void;
+  onCallLive?: () => void;
   /** Larger layout for client-side video calls */
   wide?: boolean;
 }
@@ -32,6 +33,7 @@ export default function WebRTCCallPanel({
   remoteLabel,
   onEndCall,
   onPeerHangup,
+  onCallLive,
   wide = false,
 }: WebRTCCallPanelProps) {
   const [isEnding, setIsEnding] = React.useState(false);
@@ -47,7 +49,7 @@ export default function WebRTCCallPanel({
     toggleMute,
     resumeRemoteMedia,
     endCall,
-  } = useWebRTCCall({ sessionId, role, isCaller, enabled, initialStream, onPeerHangup });
+  } = useWebRTCCall({ sessionId, role, isCaller, enabled, initialStream, onPeerHangup, onCallLive });
 
   const handleEnd = async () => {
     if (isEnding) return;

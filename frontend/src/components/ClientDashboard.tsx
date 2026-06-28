@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { 
   CreditCard, Send, Clock, Shield, RefreshCw,
   PhoneCall, PhoneOff, Wifi, Star, Sparkle, Sparkles,
@@ -191,6 +191,7 @@ export default function ClientDashboard({
 
   // Active Session & Feedback
   const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [mediaConnected, setMediaConnected] = useState(false);
   const [callMediaStream, setCallMediaStream] = useState<MediaStream | null>(null);
   const [dismissedSessionId, setDismissedSessionId] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
@@ -245,7 +246,20 @@ export default function ClientDashboard({
       ? activeSession
       : liveClientSession;
   const hasOverlappingCall = Boolean(blockingSession);
-  const callIsLive = isCallLive(activeSession);
+  const callIsLive = isCallLive(activeSession) || mediaConnected;
+
+  const handleCallMediaLive = useCallback(() => {
+    setMediaConnected(true);
+    setActiveSession((prev) =>
+      prev ? mergeLiveSession(prev, { ...prev, status: "active" }) : prev
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!activeSession) {
+      setMediaConnected(false);
+    }
+  }, [activeSession?.id]);
 
   useEffect(() => {
     return callSocket.subscribe((message) => {
@@ -1049,11 +1063,12 @@ export default function ClientDashboard({
                       wide
                       enabled={shouldClientNegotiateWebRTC(activeSession)}
                       initialStream={callMediaStream}
-                      status={isCallLive(activeSession) ? "active" : activeSession.status}
+                      status={callIsLive ? "active" : activeSession.status}
                       peerName={activeSession.interpreterName || "Interpreter"}
                       languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
                       localLabel="You: Clinic Desk"
                       remoteLabel={`Active: ${activeSession.interpreterName || "Interpreter"}`}
+                      onCallLive={handleCallMediaLive}
                       onEndCall={handleCancelCall}
                       onPeerHangup={(sessionId) => {
                         const completedCandidate =
