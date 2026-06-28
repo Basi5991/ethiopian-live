@@ -57,45 +57,54 @@ function hasIceCandidate(payload: unknown): payload is RTCIceCandidateInit {
   );
 }
 
-/** Acquire video and audio separately — works when a combined constraint fails (e.g. busy camera). */
+/** Acquire video and audio — combined first, then split fallbacks. */
 export async function acquireCallMedia(options: { preferVideo?: boolean } = {}): Promise<MediaStream> {
   const { preferVideo = true } = options;
-  const stream = new MediaStream();
+
+  const attempts: MediaStreamConstraints[] = preferVideo
+    ? [
+        { audio: { echoCancellation: true, noiseSuppression: true }, video: true },
+        { audio: { echoCancellation: true, noiseSuppression: true }, video: { width: { ideal: 640 }, height: { ideal: 480 } } },
+        { audio: true, video: false },
+      ]
+    : [{ audio: { echoCancellation: true, noiseSuppression: true }, video: false }];
+
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch {
+      /* try next constraint set */
+    }
+  }
 
   if (preferVideo) {
+    const stream = new MediaStream();
     const videoAttempts: MediaStreamConstraints[] = [
       { video: true, audio: false },
       { video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false },
-      { video: { width: { max: 320 }, height: { max: 240 } }, audio: false },
-      { video: { facingMode: "user" }, audio: false },
     ];
-
     for (const constraints of videoAttempts) {
       try {
         const videoOnly = await navigator.mediaDevices.getUserMedia(constraints);
         videoOnly.getVideoTracks().forEach((track) => stream.addTrack(track));
         break;
       } catch {
-        /* try next constraint */
+        /* try next */
       }
     }
+    try {
+      const audioOnly = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false,
+      });
+      audioOnly.getAudioTracks().forEach((track) => stream.addTrack(track));
+    } catch {
+      /* audio optional */
+    }
+    if (stream.getTracks().length > 0) return stream;
   }
 
-  try {
-    const audioOnly = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-      video: false,
-    });
-    audioOnly.getAudioTracks().forEach((track) => stream.addTrack(track));
-  } catch {
-    /* audio optional if we already have video */
-  }
-
-  if (stream.getTracks().length === 0) {
-    throw new Error("Could not access camera/microphone.");
-  }
-
-  return stream;
+  throw new Error("Could not access camera/microphone.");
 }
 
 /** @deprecated Use acquireCallMedia — kept for imports that expect the old name. */
@@ -179,6 +188,8 @@ export function useWebRTCCall({
   const onPeerHangupRef = useRef<((sessionId: string) => void) | undefined>(undefined);
   const onCallLiveRef = useRef<(() => void) | undefined>(undefined);
   const callLiveNotifiedRef = useRef(false);
+  const handleRemoteSignalRef = useRef<(signal: WebRTCSignalMessage) => Promise<void>>(async () => {});
+  const ingestRemoteSignalRef = useRef<(signal: WebRTCSignalMessage) => void>(() => {});
 
   const [connectionState, setConnectionState] = useState<RTCPeerConnectionState>("new");
   const [mediaError, setMediaError] = useState<string | null>(null);
@@ -286,26 +297,23 @@ export function useWebRTCCall({
 
       negotiatingRef.current = true;
       try {
-        const localStream = localStreamRef.current;
-        if (localStream) {
-          await tryAddVideoTrack(localStream, pc);
-          attachLocalStreamToPeerConnection(pc, localStream);
-        }
-
         if (pc.signalingState === "have-local-offer") {
           await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
         }
 
-        const stateAfterRollback = pc.signalingState;
-        if ((pc.localDescription?.type as string | undefined) === "answer") return;
-
-        if (stateAfterRollback === "stable") {
+        if (pc.signalingState === "stable") {
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
         }
 
-        const stateBeforeAnswer = pc.signalingState;
-        if (stateBeforeAnswer !== "have-remote-offer" && stateBeforeAnswer !== "have-local-pranswer") {
+        const stateBeforeAttach = pc.signalingState;
+        if (stateBeforeAttach !== "have-remote-offer" && stateBeforeAttach !== "have-local-pranswer") {
           return;
+        }
+
+        const localStream = localStreamRef.current;
+        if (localStream) {
+          await tryAddVideoTrack(localStream, pc);
+          attachLocalStreamToPeerConnection(pc, localStream);
         }
 
         await flushPendingIce(pc);
@@ -314,36 +322,37 @@ export function useWebRTCCall({
         if (pc.localDescription) {
           postSignal("answer", pc.localDescription.toJSON());
         }
-        notifyCallLive();
       } finally {
         negotiatingRef.current = false;
       }
     },
-    [flushPendingIce, postSignal, notifyCallLive]
+    [flushPendingIce, postSignal]
   );
 
   const attachRemoteTrack = useCallback(
-    (track: MediaStreamTrack) => {
+    (track: MediaStreamTrack, inboundStream?: MediaStream) => {
       if (track.readyState === "ended") return;
+
       const localStream = localStreamRef.current;
       if (localStream?.getTracks().some((t) => t.id === track.id)) return;
-      if (!remoteStreamRef.current) {
-        remoteStreamRef.current = new MediaStream();
+
+      if (inboundStream) {
+        remoteStreamRef.current = inboundStream;
+      } else {
+        if (!remoteStreamRef.current) {
+          remoteStreamRef.current = new MediaStream();
+        }
+        const remote = remoteStreamRef.current;
+        if (!remote.getTracks().some((t) => t.id === track.id)) {
+          remote.addTrack(track);
+        }
       }
-      const remote = remoteStreamRef.current;
-      if (!remote.getTracks().some((t) => t.id === track.id)) {
-        remote.addTrack(track);
-      }
-      track.onunmute = () => {
-        setVideoBindTick((n) => n + 1);
-        bindVideoElements();
-      };
+
       setRemoteReady(true);
       setVideoBindTick((n) => n + 1);
       bindVideoElements();
-      notifyCallLive();
     },
-    [bindVideoElements, notifyCallLive]
+    [bindVideoElements]
   );
 
   const syncRemoteReceivers = useCallback(
@@ -355,6 +364,21 @@ export function useWebRTCCall({
       }
     },
     [attachRemoteTrack]
+  );
+
+  const markMediaConnected = useCallback(
+    (pc: RTCPeerConnection) => {
+      syncRemoteReceivers(pc);
+      bindVideoElements();
+      if (
+        pc.connectionState === "connected" ||
+        pc.iceConnectionState === "connected" ||
+        pc.iceConnectionState === "completed"
+      ) {
+        notifyCallLive();
+      }
+    },
+    [syncRemoteReceivers, bindVideoElements, notifyCallLive]
   );
 
   const sendRenegotiationOffer = useCallback(
@@ -486,12 +510,10 @@ export function useWebRTCCall({
 
           try {
             await activePc.setRemoteDescription(new RTCSessionDescription(answerSdp));
-            syncRemoteReceivers(activePc);
+            markMediaConnected(activePc);
             await flushPendingIce(activePc);
             setRemoteReady(Boolean(remoteStreamRef.current?.getTracks().length));
             setVideoBindTick((n) => n + 1);
-            bindVideoElements();
-            notifyCallLive();
             void pollPeerSignalsRef.current?.();
             setMediaError(null);
           } catch (err) {
@@ -520,7 +542,7 @@ export function useWebRTCCall({
         onPeerHangupRef.current?.(sid || "");
       }
     },
-    [acceptOfferAndAnswer, enqueueSdpWork, flushPendingIce, teardownMedia, bindVideoElements, syncRemoteReceivers, notifyCallLive]
+    [acceptOfferAndAnswer, enqueueSdpWork, flushPendingIce, teardownMedia, markMediaConnected]
   );
 
   const ingestRemoteSignal = useCallback(
@@ -531,12 +553,12 @@ export function useWebRTCCall({
         return;
       }
       processedIdsRef.current.add(signal.id);
-      void handleRemoteSignal(signal).catch((err) => {
+      void handleRemoteSignalRef.current(signal).catch((err) => {
         const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
         setMediaError(message);
       });
     },
-    [handleRemoteSignal]
+    []
   );
 
   const pollPeerSignals = useCallback(async () => {
@@ -550,7 +572,7 @@ export function useWebRTCCall({
       if (!res.ok) return;
       const data = (await res.json()) as { signals?: WebRTCSignalMessage[] };
       for (const raw of data.signals || []) {
-        ingestRemoteSignal({
+        ingestRemoteSignalRef.current({
           id: raw.id,
           senderRole: raw.senderRole,
           signalType: raw.signalType,
@@ -561,8 +583,10 @@ export function useWebRTCCall({
     } catch {
       /* retry on next poll */
     }
-  }, [ingestRemoteSignal]);
+  }, []);
 
+  ingestRemoteSignalRef.current = ingestRemoteSignal;
+  handleRemoteSignalRef.current = handleRemoteSignal;
   pollPeerSignalsRef.current = pollPeerSignals;
 
   const endCall = useCallback(async () => {
@@ -613,7 +637,7 @@ export function useWebRTCCall({
         payload: message.signal?.payload || message.payload || {},
         createdAt: message.signal?.createdAt || new Date().toISOString(),
       };
-      ingestRemoteSignal(signal);
+      ingestRemoteSignalRef.current(signal);
     });
 
     const start = async () => {
@@ -643,10 +667,9 @@ export function useWebRTCCall({
         pcRef.current = pc;
 
         pc.ontrack = (event) => {
-          if (event.streams?.[0]) {
-            for (const track of event.streams[0].getTracks()) {
-              attachRemoteTrack(track);
-            }
+          const inbound = event.streams?.[0];
+          if (inbound) {
+            attachRemoteTrack(event.track, inbound);
             return;
           }
           attachRemoteTrack(event.track);
@@ -661,31 +684,22 @@ export function useWebRTCCall({
         pc.onconnectionstatechange = () => {
           setConnectionState(pc.connectionState);
           if (pc.connectionState === "connected") {
-            syncRemoteReceivers(pc);
-            bindVideoElements();
-            notifyCallLive();
+            markMediaConnected(pc);
           }
         };
 
         pc.oniceconnectionstatechange = () => {
-          if (
-            pc.iceConnectionState === "connected" ||
-            pc.iceConnectionState === "completed"
-          ) {
-            syncRemoteReceivers(pc);
-            if (remoteStreamRef.current?.getTracks().length) {
-              setRemoteReady(true);
-              setVideoBindTick((n) => n + 1);
-              bindVideoElements();
-            }
-            notifyCallLive();
+          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+            markMediaConnected(pc);
           }
         };
 
         if (isCallerRef.current) {
-          await tryAddVideoTrack(stream, pc);
           attachLocalStreamToPeerConnection(pc, stream);
-          const offer = await pc.createOffer();
+          if (!stream.getVideoTracks().some((t) => t.readyState === "live")) {
+            await tryAddVideoTrack(stream, pc);
+          }
+          const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
           await pc.setLocalDescription(offer);
           if (pc.localDescription) {
             postSignal("offer", pc.localDescription.toJSON());
@@ -722,13 +736,13 @@ export function useWebRTCCall({
         const pendingSignals = [...pendingSignalsRef.current];
         pendingSignalsRef.current = [];
         for (const signal of pendingSignals) {
-          ingestRemoteSignal(signal);
+          ingestRemoteSignalRef.current(signal);
         }
 
         stopPollTimer();
         const runBurstPoll = async () => {
           for (let i = 0; i < 16 && !cancelled && mountId === mountGenRef.current; i++) {
-            await pollPeerSignals();
+            await pollPeerSignalsRef.current?.();
             const pcState = pcRef.current?.connectionState;
             if (pcState === "connected" || pcState === "closed") break;
             await new Promise((resolve) => setTimeout(resolve, 250));
@@ -736,7 +750,7 @@ export function useWebRTCCall({
         };
         void runBurstPoll();
         pollTimerRef.current = setInterval(() => {
-          void pollPeerSignals();
+          void pollPeerSignalsRef.current?.();
         }, 500);
 
         // Callee: if video was unavailable at answer time, renegotiate once camera frees up
@@ -774,19 +788,9 @@ export function useWebRTCCall({
         teardownMedia();
       }
     };
-  }, [
-    enabled,
-    sessionId,
-    postSignal,
-    bindVideoElements,
-    attachRemoteTrack,
-    sendRenegotiationOffer,
-    teardownMedia,
-    stopPollTimer,
-    pollPeerSignals,
-    ingestRemoteSignal,
-    handleRemoteSignal,
-  ]);
+    // Keep this effect tied to session lifecycle only — extra deps were tearing down mid-call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, sessionId]);
 
   useEffect(() => {
     bindVideoElements();
