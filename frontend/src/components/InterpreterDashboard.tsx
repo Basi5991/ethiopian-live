@@ -412,19 +412,28 @@ export default function InterpreterDashboard({
   useEffect(() => {
     return callSocket.subscribe((message) => {
       if (message.type === "call.ringing") {
-        if (endedSessionIds.current.has(message.session.id)) return;
+        const session = message.session;
+        if (session.status !== "incoming") return;
+        if (endedSessionIds.current.has(session.id)) return;
+        if (acceptedSessionIds.current.has(session.id)) return;
+        if (callLockSessionIdRef.current === session.id) return;
         if (
-          !isIncomingCallForInterpreter(message.session, interpreterId, interpreterLanguages)
+          session.interpreterId &&
+          session.interpreterId !== interpreterId
+        ) {
+          return;
+        }
+        if (
+          !isIncomingCallForInterpreter(session, interpreterId, interpreterLanguages)
         ) {
           return;
         }
         if (
           onlineStatusRef.current === "active" &&
           !activeSessionRef.current &&
-          !callLockSessionIdRef.current &&
-          !acceptedSessionIds.current.has(message.session.id)
+          !callLockSessionIdRef.current
         ) {
-          setIncomingRequest(message.session);
+          setIncomingRequest(session);
         }
       } else if (message.type === "call.accepted") {
         if (endedSessionIds.current.has(message.session.id)) return;
@@ -522,6 +531,14 @@ export default function InterpreterDashboard({
       if (isAccepting) return null;
       if (callLockSessionId) return null;
       if (currentActive || activeSession?.status === "active") return null;
+      if (
+        nextIncoming &&
+        (acceptedSessionIds.current.has(nextIncoming.id) ||
+          endedSessionIds.current.has(nextIncoming.id) ||
+          callLockSessionId === nextIncoming.id)
+      ) {
+        return null;
+      }
       if (nextIncoming && endedSessionIds.current.has(nextIncoming.id)) return prev;
       return prev || nextIncoming || null;
     });
@@ -694,9 +711,18 @@ export default function InterpreterDashboard({
 
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.session) {
+        acceptedSessionIds.current.add(sessionId);
+        setCallLockSessionId(sessionId);
         setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
+        setIncomingRequest(null);
         onActionComplete();
       } else if (res.status === 409) {
+        acceptedSessionIds.current.add(sessionId);
+        setCallLockSessionId(sessionId);
+        setIncomingRequest(null);
+        if (data.session) {
+          setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
+        }
         onActionComplete();
       } else if (!res.ok && data.error) {
         throw new Error(String(data.error));

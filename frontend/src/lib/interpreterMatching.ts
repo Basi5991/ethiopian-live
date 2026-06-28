@@ -63,6 +63,7 @@ export function isIncomingCallForInterpreter(
   if (session.status !== "incoming") return false;
 
   if (session.interpreterId) {
+    // Direct dial targets one interpreter; broadcast calls stay unassigned until accept.
     return session.interpreterId === interpreterId;
   }
 

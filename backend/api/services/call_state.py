@@ -246,13 +246,41 @@ def accept_call(session_id: str, interpreter_id: str | None, interpreter_name: s
             return CallStateResult(False, error="Session not found.", status=404)
 
         if session.status != "incoming":
+            assigned_id = None
+            if session.interpreter and hasattr(session.interpreter, "profile"):
+                assigned_id = session.interpreter.profile.external_id
+            if session.status == "active" and assigned_id == interpreter_id:
+                session = Session.objects.prefetch_related("chat_messages").select_related(
+                    "client__profile", "interpreter__profile"
+                ).get(pk=session_id)
+                session_data = serialize_session(session)
+                return CallStateResult(
+                    True,
+                    event="call.accepted",
+                    session=session_data,
+                    client_id=session_data.get("clientId"),
+                    target_interpreter_id=interpreter_id,
+                )
             return CallStateResult(False, error="This session is no longer available to accept.", status=409)
 
         profile = get_profile_by_external_id(interpreter_id)
         if not profile or profile.role != "interpreter":
             return CallStateResult(False, error="A valid interpreter account is required to accept this call.", status=400)
 
-        if _active_interpreter_session(profile):
+        active_session = _active_interpreter_session(profile)
+        if active_session:
+            if active_session.pk == session_id:
+                session = Session.objects.prefetch_related("chat_messages").select_related(
+                    "client__profile", "interpreter__profile"
+                ).get(pk=session_id)
+                session_data = serialize_session(session)
+                return CallStateResult(
+                    True,
+                    event="call.accepted",
+                    session=session_data,
+                    client_id=session_data.get("clientId"),
+                    target_interpreter_id=interpreter_id,
+                )
             return CallStateResult(False, error="You already have an active call.", status=409)
 
         if not can_interpreter_accept_session(session, profile):

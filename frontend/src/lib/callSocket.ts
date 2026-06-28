@@ -50,7 +50,6 @@ function resolveCallSocketUrl(userId: string, role: CallSocketRole): string {
 class CallSocketClient {
   private socket: WebSocket | null = null;
   private listeners = new Set<Listener>();
-  private recentMessages: CallSocketMessage[] = [];
   private sendQueue: unknown[] = [];
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -77,8 +76,6 @@ class CallSocketClient {
     this.socket.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as CallSocketMessage;
-        this.recentMessages.push(message);
-        this.recentMessages = this.recentMessages.slice(-100);
         this.listeners.forEach((listener) => listener(message));
       } catch (err) {
         console.warn("Ignoring malformed call socket message", err);
@@ -98,11 +95,8 @@ class CallSocketClient {
   subscribe(listener: Listener) {
     this.listeners.add(listener);
     this.connect();
-    this.recentMessages.forEach((message) => {
-      setTimeout(() => {
-        if (this.listeners.has(listener)) listener(message);
-      }, 0);
-    });
+    // Do not replay recent call lifecycle events: stale call.ringing replays
+    // were re-opening the accept popup after a call had already been accepted.
     return () => {
       this.listeners.delete(listener);
     };
