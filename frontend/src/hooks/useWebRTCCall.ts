@@ -170,6 +170,8 @@ export function useWebRTCCall({
   const mountGenRef = useRef(0);
   const ownsLocalStreamRef = useRef(false);
   const renegotiatingRef = useRef(false);
+  const negotiatingRef = useRef(false);
+  const sdpChainRef = useRef(Promise.resolve());
   const endedSessionsRef = useRef<Set<string>>(new Set());
   const onPeerHangupRef = useRef<((sessionId: string) => void) | undefined>(undefined);
 
@@ -257,19 +259,51 @@ export function useWebRTCCall({
     }
   }, []);
 
+  const enqueueSdpWork = useCallback((work: () => Promise<void>) => {
+    sdpChainRef.current = sdpChainRef.current.then(work).catch((err) => {
+      const message = err instanceof Error ? err.message : "WebRTC negotiation failed.";
+      setMediaError(message);
+    });
+    return sdpChainRef.current;
+  }, []);
+
   const acceptOfferAndAnswer = useCallback(
     async (pc: RTCPeerConnection, offer: RTCSessionDescriptionInit) => {
-      await pc.setRemoteDescription(new RTCSessionDescription(offer));
-      const localStream = localStreamRef.current;
-      if (localStream) {
-        await tryAddVideoTrack(localStream, pc);
-        attachLocalStreamToPeerConnection(pc, localStream);
-      }
-      await flushPendingIce(pc);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      if (pc.localDescription) {
-        postSignal("answer", pc.localDescription.toJSON());
+      if (negotiatingRef.current) return;
+      if (pc.localDescription?.type === "answer") return;
+
+      negotiatingRef.current = true;
+      try {
+        const localStream = localStreamRef.current;
+        if (localStream) {
+          await tryAddVideoTrack(localStream, pc);
+          attachLocalStreamToPeerConnection(pc, localStream);
+        }
+
+        if (pc.signalingState === "have-local-offer") {
+          await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
+        }
+
+        const stateAfterRollback = pc.signalingState;
+        if (pc.localDescription?.type === "answer") return;
+
+        if (stateAfterRollback === "stable") {
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        }
+
+        const stateBeforeAnswer = pc.signalingState;
+        if (stateBeforeAnswer !== "have-remote-offer" && stateBeforeAnswer !== "have-local-pranswer") {
+          return;
+        }
+
+        await flushPendingIce(pc);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        if (pc.localDescription) {
+          postSignal("answer", pc.localDescription.toJSON());
+        }
+      } finally {
+        negotiatingRef.current = false;
       }
     },
     [flushPendingIce, postSignal]
@@ -297,6 +331,9 @@ export function useWebRTCCall({
   const sendRenegotiationOffer = useCallback(
     async (pc: RTCPeerConnection) => {
       if (renegotiatingRef.current || isCallerRef.current) return;
+      if (pc.signalingState !== "stable") return;
+      if (!pc.remoteDescription) return;
+
       renegotiatingRef.current = true;
       try {
         const stream = localStreamRef.current;
@@ -339,6 +376,8 @@ export function useWebRTCCall({
     ownsLocalStreamRef.current = false;
     remoteStreamRef.current = null;
     renegotiatingRef.current = false;
+    negotiatingRef.current = false;
+    sdpChainRef.current = Promise.resolve();
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
     pendingIceRef.current = [];
@@ -382,39 +421,52 @@ export function useWebRTCCall({
 
       if (signal.signalType === "offer") {
         if (!hasSessionDescription(signal.payload)) return;
+        const offerSdp = signal.payload;
 
-        try {
-          if (pc.signalingState === "stable") {
-            await acceptOfferAndAnswer(pc, signal.payload);
-          } else if (pc.signalingState === "have-local-offer" && isCallerRef.current) {
-            await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
-            await acceptOfferAndAnswer(pc, signal.payload);
-          } else if (pc.signalingState === "have-local-answer" && !isCallerRef.current) {
-            /* duplicate offer after answer was sent — ignore */
-            return;
+        await enqueueSdpWork(async () => {
+          const activePc = pcRef.current;
+          if (!activePc) return;
+
+          try {
+            if (isCallerRef.current) {
+              if (activePc.signalingState === "stable") {
+                await acceptOfferAndAnswer(activePc, offerSdp);
+              } else if (activePc.signalingState === "have-local-offer") {
+                await activePc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
+                await acceptOfferAndAnswer(activePc, offerSdp);
+              }
+            } else {
+              if (activePc.localDescription?.type === "answer") return;
+              await acceptOfferAndAnswer(activePc, offerSdp);
+            }
+            setMediaError(null);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "WebRTC offer negotiation failed.";
+            setMediaError(message);
           }
-          setMediaError(null);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "WebRTC offer negotiation failed.";
-          setMediaError(message);
-        }
+        });
       } else if (signal.signalType === "answer" && isCallerRef.current) {
         if (!hasSessionDescription(signal.payload)) return;
-        if (pc.signalingState !== "have-local-offer" && pc.signalingState !== "have-remote-offer") {
-          return;
-        }
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-          await flushPendingIce(pc);
-          setRemoteReady(Boolean(remoteStreamRef.current?.getTracks().length));
-          setVideoBindTick((n) => n + 1);
-          bindVideoElements();
-          void pollPeerSignalsRef.current?.();
-          setMediaError(null);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : "WebRTC answer negotiation failed.";
-          setMediaError(message);
-        }
+        const answerSdp = signal.payload;
+
+        await enqueueSdpWork(async () => {
+          const activePc = pcRef.current;
+          if (!activePc) return;
+          if (activePc.signalingState !== "have-local-offer") return;
+
+          try {
+            await activePc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+            await flushPendingIce(activePc);
+            setRemoteReady(Boolean(remoteStreamRef.current?.getTracks().length));
+            setVideoBindTick((n) => n + 1);
+            bindVideoElements();
+            void pollPeerSignalsRef.current?.();
+            setMediaError(null);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "WebRTC answer negotiation failed.";
+            setMediaError(message);
+          }
+        });
       } else if (signal.signalType === "ice") {
         if (!hasIceCandidate(signal.payload)) return;
         const candidate = signal.payload;
@@ -436,7 +488,7 @@ export function useWebRTCCall({
         onPeerHangupRef.current?.(sid || "");
       }
     },
-    [acceptOfferAndAnswer, flushPendingIce, teardownMedia, bindVideoElements]
+    [acceptOfferAndAnswer, enqueueSdpWork, flushPendingIce, teardownMedia, bindVideoElements]
   );
 
   const ingestRemoteSignal = useCallback(
@@ -612,7 +664,8 @@ export function useWebRTCCall({
             if (
               activePc.connectionState === "connected" ||
               activePc.connectionState === "closed" ||
-              activePc.signalingState === "stable"
+              activePc.signalingState === "stable" ||
+              activePc.remoteDescription?.type === "answer"
             ) {
               if (offerRepublishTimerRef.current) {
                 clearInterval(offerRepublishTimerRef.current);
