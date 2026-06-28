@@ -488,6 +488,7 @@ export default function ClientDashboard({
         cost,
         clientId,
       });
+      onActionComplete();
       playBeepTone(980, 150);
       if (isScheduled) {
         alert("Success: Language specialist reserved for booked clinical allocation!");
@@ -537,6 +538,7 @@ export default function ClientDashboard({
         cost,
         clientId,
       });
+      onActionComplete();
     } catch (err) {
       setWizardError("Network connection failed.");
       clearCallMedia();

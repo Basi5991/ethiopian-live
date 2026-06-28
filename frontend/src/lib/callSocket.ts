@@ -40,11 +40,7 @@ function resolveCallSocketUrl(userId: string, role: CallSocketRole): string {
     return `${base}/ws/calls/?${params}`;
   }
 
-  const host = window.location.hostname;
-  const port = window.location.port;
-  const isFrontendDevHost = (host === "localhost" || host === "127.0.0.1") && (port === "3000" || port === "5173");
-  const socketHost = isFrontendDevHost ? "127.0.0.1:8000" : window.location.host;
-  return `${protocol}//${socketHost}/ws/calls/?${params}`;
+  return `${protocol}//${window.location.host}/ws/calls/?${params}`;
 }
 
 class CallSocketClient {

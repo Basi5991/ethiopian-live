@@ -21,20 +21,20 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
-      // Backend Proxy Integration: Set BACKEND_PROXY_URL to proxy relative '/api' calls to Django (e.g., http://localhost:8000)
-      proxy: process.env.BACKEND_PROXY_URL ? {
+      // Proxy API and WebSocket traffic to Django during local frontend dev.
+      proxy: {
         '/api': {
-          target: process.env.BACKEND_PROXY_URL,
+          target: process.env.BACKEND_PROXY_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
         },
         '/ws': {
-          target: process.env.BACKEND_PROXY_URL,
+          target: process.env.BACKEND_PROXY_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
-      } : undefined,
+      },
     },
   };
 });

@@ -349,9 +349,19 @@ export function useWebRTCCall({
 
   const applyOfferAsCallee = useCallback(
     async (pc: RTCPeerConnection, offer: RTCSessionDescriptionInit) => {
-      if (pc.localDescription?.type === "answer") return;
-
       const remoteSdp = pc.remoteDescription?.sdp;
+      if (
+        pc.localDescription?.type === "answer" &&
+        remoteSdp &&
+        remoteSdp === offer.sdp
+      ) {
+        return;
+      }
+
+      if (pc.localDescription?.type === "answer") {
+        await pc.setLocalDescription({ type: "rollback" } as RTCSessionDescriptionInit);
+      }
+
       if (remoteSdp && remoteSdp === offer.sdp) {
         if (pc.signalingState === "have-remote-offer" || pc.signalingState === "have-local-pranswer") {
           await localMediaReadyRef.current?.promise;
@@ -561,8 +571,14 @@ export function useWebRTCCall({
       if (message.type !== "call.accepted") return;
       if (!("session" in message) || message.session?.id !== sessionId) return;
       void pollPeerSignalsRef.current?.();
+      if (isCallerRef.current) {
+        const pc = pcRef.current;
+        if (pc?.localDescription?.type === "offer") {
+          postSignal("offer", pc.localDescription.toJSON());
+        }
+      }
     });
-  }, [enabled, sessionId, role]);
+  }, [enabled, sessionId, role, postSignal]);
 
   useEffect(() => {
     if (!enabled || !sessionId || endedSessionsRef.current.has(sessionId)) return;

@@ -512,8 +512,18 @@ export default function InterpreterDashboard({
           acceptedSessionIds.current.delete(prev.id);
           return null;
         }
-        if (match.status === "active") return match;
+        if (match.status === "active") return mergeLiveSession(prev, match);
         return prev;
+      }
+
+      if (callLockSessionId) {
+        const locked =
+          currentActive ||
+          sessions.find((session) => session.id === callLockSessionId) ||
+          null;
+        if (locked) {
+          return mergeLiveSession(prev, { ...locked, status: "active", interpreterId });
+        }
       }
 
       return null;
@@ -688,6 +698,16 @@ export default function InterpreterDashboard({
         interpreterId,
         interpreterName: currentInterpreter?.name,
       });
+    } else {
+      const knownSession = sessions.find((session) => session.id === sessionId);
+      if (knownSession) {
+        setActiveSession({
+          ...knownSession,
+          status: "active",
+          interpreterId,
+          interpreterName: currentInterpreter?.name,
+        });
+      }
     }
 
     const mediaPromise = callMediaStream
@@ -714,6 +734,11 @@ export default function InterpreterDashboard({
         acceptedSessionIds.current.add(sessionId);
         setCallLockSessionId(sessionId);
         setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
+        setIncomingRequest(null);
+        onActionComplete();
+      } else if (res.ok) {
+        acceptedSessionIds.current.add(sessionId);
+        setCallLockSessionId(sessionId);
         setIncomingRequest(null);
         onActionComplete();
       } else if (res.status === 409) {
