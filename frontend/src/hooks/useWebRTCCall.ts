@@ -225,7 +225,7 @@ export function useWebRTCCall({
     bindVideoElements();
   });
 
-  const postSignal = useCallback(async (signalType: WebRTCSignalMessage["signalType"], payload: unknown) => {
+  const postSignal = useCallback((signalType: WebRTCSignalMessage["signalType"], payload: unknown) => {
     const sid = sessionIdRef.current;
     if (!sid) return false;
     const role = roleRef.current;
@@ -235,19 +235,17 @@ export function useWebRTCCall({
     signalSocketRef.current = socket;
     socket.send(`webrtc.${signalType}`, { sessionId: sid, payload: (payload as Record<string, unknown>) || {} });
 
-    try {
-      await fetch(apiUrl(`/api/webrtc/${sid}/signal`), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          senderRole: role,
-          signalType,
-          payload: payload ?? {},
-        }),
-      });
-    } catch {
+    void fetch(apiUrl(`/api/webrtc/${sid}/signal`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        senderRole: role,
+        signalType,
+        payload: payload ?? {},
+      }),
+    }).catch(() => {
       /* HTTP poll fallback on peer will pick up persisted signals */
-    }
+    });
     return true;
   }, []);
 
@@ -276,7 +274,7 @@ export function useWebRTCCall({
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       if (pc.localDescription) {
-        await postSignal("answer", pc.localDescription.toJSON());
+        postSignal("answer", pc.localDescription.toJSON());
       }
     },
     [flushPendingIce, postSignal]
@@ -310,7 +308,7 @@ export function useWebRTCCall({
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         if (pc.localDescription) {
-          await postSignal("offer", pc.localDescription.toJSON());
+          postSignal("offer", pc.localDescription.toJSON());
         }
       } catch {
         /* retry on next poll cycle */
@@ -481,9 +479,27 @@ export function useWebRTCCall({
     if (sid) {
       endedSessionsRef.current.add(sid);
     }
-    await postSignal("hangup", {});
+    postSignal("hangup", {});
     teardownMedia();
   }, [postSignal, teardownMedia]);
+
+  useEffect(() => {
+    if (!enabled || !sessionId || !isCaller) return;
+
+    const socket = getCallSocket(getCurrentUserIdForSocket(role), role);
+    const unsubscribe = socket.subscribe((message) => {
+      if (message.type !== "call.accepted") return;
+      if (!("session" in message) || message.session?.id !== sessionId) return;
+
+      const pc = pcRef.current;
+      if (pc?.localDescription?.type === "offer") {
+        postSignal("offer", pc.localDescription.toJSON());
+        void pollPeerSignals();
+      }
+    });
+
+    return unsubscribe;
+  }, [enabled, sessionId, isCaller, role, postSignal, pollPeerSignals]);
 
   useEffect(() => {
     if (!enabled || !sessionId) {
@@ -566,7 +582,7 @@ export function useWebRTCCall({
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
           if (pc.localDescription) {
-            await postSignal("offer", pc.localDescription.toJSON());
+            postSignal("offer", pc.localDescription.toJSON());
           }
 
           offerRepublishTimerRef.current = setInterval(() => {
@@ -591,9 +607,9 @@ export function useWebRTCCall({
               return;
             }
             if (activePc.localDescription?.type === "offer") {
-              void postSignal("offer", activePc.localDescription.toJSON());
+              postSignal("offer", activePc.localDescription.toJSON());
             }
-          }, 3000);
+          }, 1000);
         }
 
         const pendingSignals = [...pendingSignalsRef.current];
@@ -603,10 +619,18 @@ export function useWebRTCCall({
         }
 
         stopPollTimer();
-        void pollPeerSignals();
+        const runBurstPoll = async () => {
+          for (let i = 0; i < 16 && !cancelled && mountId === mountGenRef.current; i++) {
+            await pollPeerSignals();
+            const pcState = pcRef.current?.connectionState;
+            if (pcState === "connected" || pcState === "closed") break;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+        };
+        void runBurstPoll();
         pollTimerRef.current = setInterval(() => {
           void pollPeerSignals();
-        }, 1500);
+        }, 500);
 
         // Callee: if video was unavailable at answer time, renegotiate once camera frees up
         if (!isCallerRef.current && stream.getVideoTracks().length === 0) {

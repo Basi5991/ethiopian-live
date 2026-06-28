@@ -350,7 +350,7 @@ export default function ClientDashboard({
     if (!activeSession || isCallLive(activeSession)) return;
     const refreshId = window.setInterval(() => {
       onActionComplete();
-    }, 2000);
+    }, 1000);
     return () => window.clearInterval(refreshId);
   }, [activeSession?.status, activeSession?.interpreterId, activeSession?.id, onActionComplete]);
 

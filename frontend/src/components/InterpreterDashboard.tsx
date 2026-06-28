@@ -621,11 +621,41 @@ export default function InterpreterDashboard({
     }
   };
 
-  // Accept — hit API immediately; grab camera in parallel so the button never feels stuck
+  useEffect(() => {
+    if (!visibleIncomingRequest) {
+      if (!activeSessionRef.current) {
+        setCallMediaStream((prev) => {
+          prev?.getTracks().forEach((track) => track.stop());
+          return null;
+        });
+      }
+      return;
+    }
+
+    let cancelled = false;
+    void acquireCallMedia({ preferVideo: true })
+      .then((stream) => {
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        setCallMediaStream((prev) => {
+          prev?.getTracks().forEach((track) => track.stop());
+          return stream;
+        });
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visibleIncomingRequest?.id]);
+
+  // Accept — notify server immediately; camera runs in parallel
   const handleAcceptRequest = async (sessionId: string) => {
     if (isAccepting) return;
     setIsAccepting(true);
-    setAcceptPhase("media");
+    setAcceptPhase("connecting");
     setAcceptError("");
 
     const callSnapshot = incomingRequest?.id === sessionId ? incomingRequest : null;
@@ -643,15 +673,12 @@ export default function InterpreterDashboard({
       });
     }
 
-    let stream: MediaStream | null = null;
-    try {
-      stream = await acquireCallMedia({ preferVideo: true }).catch(() => null);
-      if (stream) {
-        setCallMediaStream(stream);
-      }
+    const mediaPromise = callMediaStream
+      ? Promise.resolve(callMediaStream)
+      : acquireCallMedia({ preferVideo: true }).catch(() => null);
 
-      setAcceptPhase("connecting");
-      const res = await fetch(apiUrl(`/api/sessions/${sessionId}/accept`), {
+    try {
+      const acceptPromise = fetch(apiUrl(`/api/sessions/${sessionId}/accept`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -659,6 +686,12 @@ export default function InterpreterDashboard({
           interpreterName: currentInterpreter?.name,
         }),
       });
+
+      const [res, stream] = await Promise.all([acceptPromise, mediaPromise]);
+      if (stream) {
+        setCallMediaStream(stream);
+      }
+
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.session) {
         setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
@@ -672,10 +705,10 @@ export default function InterpreterDashboard({
       setActiveSession(null);
       setCallLockSessionId(null);
       acceptedSessionIds.current.delete(sessionId);
-      if (stream) {
-        stream.getTracks().forEach((t) => t.stop());
-      }
-      setCallMediaStream(null);
+      setCallMediaStream((prev) => {
+        prev?.getTracks().forEach((t) => t.stop());
+        return null;
+      });
       if (callSnapshot) {
         setIncomingRequest(callSnapshot);
       }
@@ -690,6 +723,7 @@ export default function InterpreterDashboard({
   // Reject and close matching popup
   const handleDeclineRequest = async (sessionId: string) => {
     setAcceptError("");
+    clearCallMedia();
     try {
       callSocket.send("call.decline", { sessionId });
     } catch (e) {
