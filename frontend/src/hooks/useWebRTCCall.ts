@@ -170,6 +170,7 @@ export function useWebRTCCall({
   const pendingSignalsRef = useRef<WebRTCSignalMessage[]>([]);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const offerRepublishTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const signalSocketRef = useRef<ReturnType<typeof getCallSocket> | null>(null);
   const mountGenRef = useRef(0);
   const ownsLocalStreamRef = useRef(false);
@@ -324,6 +325,10 @@ export function useWebRTCCall({
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
+    }
+    if (offerRepublishTimerRef.current) {
+      clearInterval(offerRepublishTimerRef.current);
+      offerRepublishTimerRef.current = null;
     }
   }, []);
 
@@ -534,9 +539,7 @@ export function useWebRTCCall({
 
         const pc = new RTCPeerConnection(ICE_SERVERS);
         pcRef.current = pc;
-        if (isCallerRef.current) {
-          await configureOrderedLocalMedia(pc, stream);
-        }
+        await configureOrderedLocalMedia(pc, stream);
 
         pc.ontrack = (event) => {
           attachRemoteTrack(event.track);
@@ -565,6 +568,32 @@ export function useWebRTCCall({
           if (pc.localDescription) {
             await postSignal("offer", pc.localDescription.toJSON());
           }
+
+          offerRepublishTimerRef.current = setInterval(() => {
+            const activePc = pcRef.current;
+            const sid = sessionIdRef.current;
+            if (!activePc || !sid || endedSessionsRef.current.has(sid)) {
+              if (offerRepublishTimerRef.current) {
+                clearInterval(offerRepublishTimerRef.current);
+                offerRepublishTimerRef.current = null;
+              }
+              return;
+            }
+            if (
+              activePc.connectionState === "connected" ||
+              activePc.connectionState === "closed" ||
+              activePc.signalingState === "stable"
+            ) {
+              if (offerRepublishTimerRef.current) {
+                clearInterval(offerRepublishTimerRef.current);
+                offerRepublishTimerRef.current = null;
+              }
+              return;
+            }
+            if (activePc.localDescription?.type === "offer") {
+              void postSignal("offer", activePc.localDescription.toJSON());
+            }
+          }, 3000);
         }
 
         const pendingSignals = [...pendingSignalsRef.current];

@@ -10,7 +10,7 @@ import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
 import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
-import { callPanelStatus, isCallLive, mergeLiveSession } from "../lib/liveSession";
+import { isCallLive, mergeLiveSession, shouldClientNegotiateWebRTC } from "../lib/liveSession";
 import { interpreterSupportsLanguagePair } from "../lib/interpreterMatching";
 
 // Helper for playBeepTone
@@ -884,7 +884,9 @@ export default function ClientDashboard({
 
   return (
     <div className="animate-fade-in font-sans w-full">
-      <div className="relative mx-auto w-full max-w-[680px] min-h-[min(880px,100svh)] overflow-hidden rounded-[1.6rem] sm:rounded-[2.25rem] border border-cyan-100/60 bg-[radial-gradient(circle_at_82%_18%,rgba(182,232,255,0.92),transparent_28%),linear-gradient(180deg,#bfe6fb_0%,#1786c5_42%,#00699a_100%)] p-3 sm:p-5 md:p-7 shadow-[0_30px_80px_rgba(6,56,93,0.35)]">
+      <div className={`relative mx-auto w-full min-h-[min(880px,100svh)] overflow-hidden rounded-[1.6rem] sm:rounded-[2.25rem] border border-cyan-100/60 bg-[radial-gradient(circle_at_82%_18%,rgba(182,232,255,0.92),transparent_28%),linear-gradient(180deg,#bfe6fb_0%,#1786c5_42%,#00699a_100%)] p-3 sm:p-5 md:p-7 shadow-[0_30px_80px_rgba(6,56,93,0.35)] ${
+        activeSession ? "max-w-[980px]" : "max-w-[680px]"
+      }`}>
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_60%_44%,rgba(255,255,255,0.45),transparent_12%),radial-gradient(circle_at_88%_50%,rgba(255,255,255,0.55),transparent_10%),linear-gradient(135deg,transparent_0%,rgba(255,255,255,0.18)_48%,transparent_55%)]" />
         <div className="pointer-events-none absolute -left-24 bottom-16 h-80 w-[760px] rotate-[-12deg] opacity-50">
           <div className="h-full w-full rounded-full border-t border-white/45 blur-[1px]" />
@@ -988,7 +990,9 @@ export default function ClientDashboard({
       </div>
 
       {/* Main Responsive Grid Layout */}
-      <div className="relative z-10 mx-auto mt-6 grid max-w-[540px] grid-cols-12 gap-5">
+      <div className={`relative z-10 mx-auto mt-6 grid grid-cols-12 gap-5 ${
+        activeSession ? "max-w-full px-0 sm:px-1" : "max-w-[540px]"
+      }`}>
 
         {/* Outer full-width Video session focus when session is active, so client stays focused */}
         {activeSession && (
@@ -998,17 +1002,18 @@ export default function ClientDashboard({
             }`}>
               <div className="grid grid-cols-12 gap-6">
                 
-                {/* WebRTC video call */}
-                <div className="col-span-12 lg:col-span-7 flex flex-col">
+                {/* WebRTC video call — full width during active call for larger video tiles */}
+                <div className="col-span-12 flex flex-col">
                   {activeSession.serviceMode !== "AI" ? (
-                    <div key={activeSession.id}>
+                    <div key={activeSession.id} className="w-full">
                     <WebRTCCallPanel
                       sessionId={activeSession.id}
                       role="client"
                       isCaller
-                      enabled={isCallLive(activeSession)}
+                      wide
+                      enabled={shouldClientNegotiateWebRTC(activeSession)}
                       initialStream={callMediaStream}
-                      status={callPanelStatus(activeSession)}
+                      status={isCallLive(activeSession) ? "active" : activeSession.status}
                       peerName={activeSession.interpreterName || "Interpreter"}
                       languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
                       localLabel="You: Clinic Desk"
@@ -1052,8 +1057,8 @@ export default function ClientDashboard({
                   )}
                 </div>
 
-                {/* Right chat logs / real-time transcription feed and feedback submit */}
-                <div className={`col-span-12 lg:col-span-5 flex flex-col h-[350px] lg:h-auto border-t lg:border-t-0 p-4 border-slate-200/50`}>
+                {/* Chat / transcript below the video during active call */}
+                <div className={`col-span-12 flex flex-col h-[280px] sm:h-[320px] border-t p-4 border-slate-200/50`}>
                   
                   {activeSession.status === "active" ? (
                     <div className="flex-1 flex flex-col justify-between h-full">

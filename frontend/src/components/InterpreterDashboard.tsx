@@ -3,14 +3,15 @@ import { motion, AnimatePresence } from "motion/react";
 import { 
   Calendar, Check, Power, Briefcase, FileText, AlertTriangle, 
   Clock, TrendingUp, Download, ArrowUpRight, DollarSign, Sliders, Play, Ban, Sparkles, Send,
-  Phone, PhoneCall, PhoneOff, Smartphone, Mic, MicOff, VideoOff, Volume2, ShieldAlert, Wifi
+  Phone, PhoneCall, PhoneOff, Smartphone, Mic, MicOff, VideoOff, Volume2, ShieldAlert, Wifi,
+  User as UserIcon, Languages, X, Loader2
 } from "lucide-react";
 import { User, Session, Transaction, InterpreterAvailability, Slot } from "../types";
 import WebRTCCallPanel from "./WebRTCCallPanel";
 import { acquireCallMedia } from "../hooks/useWebRTCCall";
 import { apiUrl } from "../lib/apiUrl";
 import { getCallSocket } from "../lib/callSocket";
-import { callPanelStatus, mergeLiveSession } from "../lib/liveSession";
+import { callPanelStatus, mergeLiveSession, shouldInterpreterNegotiateWebRTC } from "../lib/liveSession";
 import {
   formatLanguageProficiencies,
   findIncomingSessionForInterpreter,
@@ -95,6 +96,191 @@ interface InterpreterDashboardProps {
   theme?: string;
 }
 
+interface IncomingCallCardProps {
+  session: Session;
+  interpreterId: string;
+  isAccepting: boolean;
+  acceptPhase: "idle" | "media" | "connecting";
+  countdown: number;
+  ringAudioReady: boolean;
+  acceptError: string;
+  interpreterLanguages: string[];
+  languageProficiencies?: User["languageProficiencies"];
+  theme: string;
+  onAccept: (sessionId: string) => void;
+  onDecline: (sessionId: string) => void;
+  onEnableRing: () => void;
+}
+
+function IncomingCallCard({
+  session,
+  interpreterId,
+  isAccepting,
+  acceptPhase,
+  countdown,
+  ringAudioReady,
+  acceptError,
+  interpreterLanguages,
+  languageProficiencies,
+  theme,
+  onAccept,
+  onDecline,
+  onEnableRing,
+}: IncomingCallCardProps) {
+  const isDirect = isDirectDialSession(session, interpreterId);
+  const commission = (session.cost * 0.85).toFixed(2);
+  const surface =
+    theme === "light"
+      ? "bg-white border-slate-200 text-slate-900 shadow-2xl"
+      : "bg-[#121218] border-white/10 text-white shadow-2xl shadow-black/40";
+  const borderClass = isDirect ? "border-emerald-500/40" : "border-amber-500/40";
+  const topBarClass = isDirect
+    ? "bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-600"
+    : "bg-gradient-to-r from-amber-500 via-amber-400 to-amber-600";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.96, y: 12 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96, y: 12 }}
+      className={`relative w-full max-w-xl rounded-3xl border-2 overflow-hidden ${borderClass} ${surface}`}
+    >
+      <div className={`absolute inset-x-0 top-0 h-1 ${topBarClass}`} />
+
+      <div className="p-6 sm:p-7 space-y-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+                isDirect
+                  ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                  : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full animate-pulse ${isDirect ? "bg-emerald-400" : "bg-amber-400"}`} />
+              {isDirect ? "Direct call" : "Broadcast match"}
+            </span>
+            {!isDirect && (
+              <span className="text-[10px] font-mono text-amber-400/90 bg-black/30 px-2 py-1 rounded-lg border border-white/5">
+                {countdown}s
+              </span>
+            )}
+          </div>
+          {!isAccepting && (
+            <button
+              type="button"
+              onClick={() => onDecline(session.id)}
+              className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition"
+              aria-label="Dismiss call"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div
+            className={`relative w-16 h-16 sm:w-[4.5rem] sm:h-[4.5rem] rounded-2xl flex items-center justify-center shrink-0 ${
+              isDirect
+                ? "bg-emerald-500/10 border-2 border-emerald-500/30"
+                : "bg-amber-500/10 border-2 border-amber-500/30"
+            }`}
+          >
+            <UserIcon className={`w-8 h-8 ${isDirect ? "text-emerald-400" : "text-amber-400"}`} />
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-500 border-2 border-[#121218] animate-ping" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Incoming client</p>
+            <h3 className="text-xl sm:text-2xl font-black truncate">{session.clientName || "Client"}</h3>
+            <p className="text-xs text-slate-400 mt-0.5 capitalize">{session.serviceType} interpretation</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/[0.03] border-white/5"}`}>
+            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-slate-500 mb-1">
+              <Languages className="w-3.5 h-3.5" />
+              Language pair
+            </div>
+            <p className="text-sm font-bold">
+              {session.languageFrom} ⇆ {session.languageTo}
+            </p>
+          </div>
+          <div className={`rounded-2xl border p-3 ${theme === "light" ? "bg-slate-50 border-slate-200" : "bg-white/[0.03] border-white/5"}`}>
+            <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-slate-500 mb-1">
+              <DollarSign className="w-3.5 h-3.5" />
+              Your earnings
+            </div>
+            <p className="text-sm font-bold text-emerald-400 font-mono">{commission} ETB</p>
+          </div>
+        </div>
+
+        {!isDirect && (
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Matched to your profile:{" "}
+            <span className="text-slate-300">
+              {formatLanguageProficiencies(interpreterLanguages, languageProficiencies)}
+            </span>
+          </p>
+        )}
+
+        {acceptError && (
+          <div className="px-3 py-2 rounded-xl bg-red-950/40 border border-red-500/30 text-red-300 text-xs">
+            {acceptError}
+          </div>
+        )}
+
+        {!ringAudioReady && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2.5 rounded-xl bg-blue-950/30 border border-blue-500/25 text-blue-100 text-xs">
+            <span>Ring sound is muted until you enable audio.</span>
+            <button
+              type="button"
+              onClick={onEnableRing}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase shrink-0"
+            >
+              Enable sound
+            </button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+          <button
+            type="button"
+            disabled={isAccepting}
+            onClick={() => onAccept(session.id)}
+            className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 font-black text-sm uppercase rounded-2xl text-white flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 transition active:scale-[0.98]"
+          >
+            {isAccepting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {acceptPhase === "media" ? "Starting camera…" : "Joining call…"}
+              </>
+            ) : (
+              <>
+                <Phone className="w-4 h-4" />
+                Accept call
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            disabled={isAccepting}
+            onClick={() => onDecline(session.id)}
+            className={`w-full py-3.5 px-4 font-bold text-sm uppercase rounded-2xl flex items-center justify-center gap-2 transition active:scale-[0.98] disabled:opacity-50 ${
+              theme === "light"
+                ? "bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200"
+                : "bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10"
+            }`}
+          >
+            <PhoneOff className="w-4 h-4" />
+            Decline
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function InterpreterDashboard({ 
   users, 
   sessions, 
@@ -159,6 +345,7 @@ export default function InterpreterDashboard({
   const [incomingRequest, setIncomingRequest] = useState<Session | null>(null);
   const [countdown, setCountdown] = useState(60);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [acceptPhase, setAcceptPhase] = useState<"idle" | "media" | "connecting">("idle");
   const [acceptError, setAcceptError] = useState("");
   const [ringAudioReady, setRingAudioReady] = useState(false);
   const acceptedSessionIds = useRef<Set<string>>(new Set());
@@ -340,22 +527,25 @@ export default function InterpreterDashboard({
     });
   }, [sessions, onlineStatus, interpreterId, interpreterLanguages, dismissedSessionId, activeSession, isAccepting, callLockSessionId]);
 
-  // Countdown simulation for incoming matching alert popup
+  // Countdown for broadcast incoming calls — reset when a new call arrives
   useEffect(() => {
-    let interval: any;
+    if (visibleIncomingRequest) {
+      setCountdown(60);
+    }
+  }, [visibleIncomingRequest?.id]);
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
     if (visibleIncomingRequest) {
       interval = setInterval(() => {
-        setCountdown(prev => {
-          if (prev <= 1) {
-            return 60;
-          }
-          return prev - 1;
-        });
+        setCountdown((prev) => (prev <= 1 ? 60 : prev - 1));
       }, 1000);
     } else {
       setCountdown(60);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [visibleIncomingRequest]);
 
   // Status updater
@@ -435,6 +625,7 @@ export default function InterpreterDashboard({
   const handleAcceptRequest = async (sessionId: string) => {
     if (isAccepting) return;
     setIsAccepting(true);
+    setAcceptPhase("media");
     setAcceptError("");
 
     const callSnapshot = incomingRequest?.id === sessionId ? incomingRequest : null;
@@ -459,6 +650,7 @@ export default function InterpreterDashboard({
         setCallMediaStream(stream);
       }
 
+      setAcceptPhase("connecting");
       const res = await fetch(apiUrl(`/api/sessions/${sessionId}/accept`), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -471,14 +663,10 @@ export default function InterpreterDashboard({
       if (res.ok && data.session) {
         setActiveSession((prev) => mergeLiveSession(prev, { ...data.session, status: "active" }));
         onActionComplete();
-        setIsAccepting(false);
       } else if (res.status === 409) {
         onActionComplete();
-        setIsAccepting(false);
       } else if (!res.ok && data.error) {
         throw new Error(String(data.error));
-      } else {
-        setIsAccepting(false);
       }
     } catch (err) {
       setActiveSession(null);
@@ -494,12 +682,14 @@ export default function InterpreterDashboard({
       setAcceptError(err instanceof Error ? err.message : "Could not accept call.");
       console.error(err);
     } finally {
+      setAcceptPhase("idle");
       setIsAccepting(false);
     }
   };
 
   // Reject and close matching popup
   const handleDeclineRequest = async (sessionId: string) => {
+    setAcceptError("");
     try {
       callSocket.send("call.decline", { sessionId });
     } catch (e) {
@@ -669,105 +859,6 @@ export default function InterpreterDashboard({
         </div>
       </div>
 
-      {/* Global incoming call alert — visible on any tab */}
-      {visibleIncomingRequest && (
-        isDirectDialSession(visibleIncomingRequest, interpreterId) ? (
-          <div className="col-span-12 p-6 rounded-2xl border-2 border-emerald-500 bg-emerald-950/25 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 shadow-2xl shadow-emerald-500/5">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full bg-emerald-500/10 border-2 border-emerald-500/30 flex items-center justify-center animate-bounce shrink-0 text-emerald-400">
-                <PhoneCall className="w-7 h-7" />
-              </div>
-              <div className="space-y-1">
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/30 text-[9px] font-black uppercase tracking-widest">
-                  Incoming WebRTC Call
-                </span>
-                <h4 className="text-base font-extrabold text-white">
-                  {visibleIncomingRequest.clientName}
-                </h4>
-                <p className="text-xs text-slate-300">
-                  {visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo} • {visibleIncomingRequest.serviceType}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                disabled={isAccepting}
-                onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
-                className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 font-black text-xs uppercase rounded-xl text-white flex items-center gap-2"
-              >
-                <Phone className="w-4 h-4" /> {isAccepting ? "Connecting…" : "Accept Call"}
-              </button>
-              <button
-                type="button"
-                disabled={isAccepting}
-                onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
-                className="px-4 py-3 text-red-400 hover:bg-red-600 hover:text-white border border-red-500/25 font-bold text-xs uppercase rounded-xl"
-              >
-                Decline
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="col-span-12 p-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div className="space-y-1">
-              <span className="text-[10px] font-bold uppercase text-amber-500">Broadcast call available</span>
-              <p className="text-sm font-bold">{visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}</p>
-              <p className="text-[10px] text-amber-300/80">
-                Matched to your languages:{" "}
-                {formatLanguageProficiencies(
-                  interpreterLanguages,
-                  currentInterpreter?.languageProficiencies
-                )}
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-amber-400 font-mono">{countdown}s</span>
-              <button
-                type="button"
-                disabled={isAccepting}
-                onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
-                className="px-4 py-2 bg-emerald-600 disabled:opacity-50 font-bold text-xs uppercase rounded-lg text-white"
-              >
-                {isAccepting ? "Connecting…" : "Accept"}
-              </button>
-              <button
-                type="button"
-                disabled={isAccepting}
-                onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
-                className="px-3 py-2 bg-white/5 text-xs text-slate-400 rounded-lg"
-              >
-                Pass
-              </button>
-            </div>
-          </div>
-        )
-      )}
-
-      {acceptError && (
-        <div className="col-span-12 px-4 py-2 rounded-xl bg-red-950/40 border border-red-500/30 text-red-300 text-xs">
-          {acceptError}
-        </div>
-      )}
-
-      {visibleIncomingRequest && !ringAudioReady && (
-        <div className="col-span-12 px-4 py-3 rounded-xl bg-blue-950/40 border border-blue-500/30 text-blue-100 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <span>Browser audio is blocked. Click once to enable the incoming call beep.</span>
-          <button
-            type="button"
-            onClick={() => {
-              void unlockIncomingCallAudio().then((ready) => {
-                setRingAudioReady(ready);
-                if (ready) void playIncomingCallBeep();
-              });
-            }}
-            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase tracking-wide"
-          >
-            Enable Ring Sound
-          </button>
-        </div>
-      )}
-
       {/* Interactive Slider Section Switcher to prevent elongated scrolling */}
       <div className="col-span-12 flex items-center justify-center pt-2 pb-1">
         <div className={`p-1 rounded-2xl border flex items-center gap-1.5 w-full max-w-md relative ${
@@ -802,146 +893,187 @@ export default function InterpreterDashboard({
 
       {/* Main Core Elements grid */}
       {dashboardSlide === "dispatch" && (
-        <div className="col-span-12 lg:col-span-8 space-y-6 animate-fade-in">
+        <div className={`${activeSession ? "col-span-12" : "col-span-12 lg:col-span-8"} space-y-6 animate-fade-in`}>
 
-        {/* Live session active monitor screen */}
         {activeSession ? (
-          <div className="space-y-6">
-            
-            {/* WebRTC live call */}
-            <div key={activeSession.id}>
-            <WebRTCCallPanel
-              sessionId={activeSession.id}
-              role="interpreter"
-              isCaller={false}
-              enabled={callPanelStatus(activeSession) === "active"}
-              initialStream={callMediaStream}
-              status={callPanelStatus(activeSession)}
-              peerName={activeSession.clientName}
-              languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
-              localLabel={`You: ${currentInterpreter.name}`}
-              remoteLabel={`Client: ${activeSession.clientName}`}
-              onEndCall={async () => {
-                if (!activeSession) return;
-                const sessionId = activeSession.id;
-                markSessionEnded(sessionId);
-                try {
-                  callSocket.send("call.end", { sessionId });
-                } catch (e) {
-                  console.error(e);
-                }
-                onActionComplete();
-              }}
-              onPeerHangup={(sessionId) => {
-                markSessionEnded(sessionId);
-              }}
-            />
-            </div>
-
-            {/* Quick Session attributes ledger */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-[#16161A] p-4 rounded-xl border border-white/5 text-xs">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">Context Objective</p>
-                <p className="text-white font-sans mt-1 capitalize">{activeSession.serviceType} Level translation</p>
+          <div className="space-y-5">
+            <div
+              className={`rounded-2xl border p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 ${
+                theme === "light" ? "bg-white border-slate-200 shadow-sm" : "bg-[#16161A] border-white/5"
+              }`}
+            >
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                  <UserIcon className="w-6 h-6 text-emerald-400" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                      Live session
+                    </span>
+                    {isAccepting && (
+                      <span className="text-[10px] text-amber-400 inline-flex items-center gap-1">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        {acceptPhase === "media" ? "Starting camera…" : "Connecting to client…"}
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-lg sm:text-xl font-black truncate">{activeSession.clientName}</h3>
+                  <p className="text-xs text-slate-400">
+                    {activeSession.languageFrom} ⇆ {activeSession.languageTo} •{" "}
+                    <span className="capitalize">{activeSession.serviceType}</span>
+                  </p>
+                </div>
               </div>
-              <div className="bg-[#16161A] p-4 rounded-xl border border-white/5 text-xs">
-                <p className="text-[10px] font-bold text-slate-500 uppercase">Est. Projected Earnings (85%)</p>
-                <p className="text-emerald-400 font-mono mt-1 text-base font-bold">{(activeSession.cost * 0.85).toFixed(2)} ETB</p>
+              <div className="text-right shrink-0">
+                <p className="text-[10px] uppercase text-slate-500 font-bold">Your earnings</p>
+                <p className="text-xl font-black text-emerald-400 font-mono">
+                  {(activeSession.cost * 0.85).toFixed(2)} ETB
+                </p>
               </div>
             </div>
 
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
+              <div className="xl:col-span-8">
+                <div key={activeSession.id}>
+                  <WebRTCCallPanel
+                    sessionId={activeSession.id}
+                    role="interpreter"
+                    isCaller={false}
+                    wide
+                    enabled={shouldInterpreterNegotiateWebRTC(activeSession)}
+                    initialStream={callMediaStream}
+                    status={callPanelStatus(activeSession)}
+                    peerName={activeSession.clientName}
+                    languageLabel={`${activeSession.languageFrom} ⇆ ${activeSession.languageTo}`}
+                    localLabel={`You: ${currentInterpreter.name}`}
+                    remoteLabel={`Client: ${activeSession.clientName}`}
+                    onEndCall={async () => {
+                      if (!activeSession) return;
+                      const sessionId = activeSession.id;
+                      markSessionEnded(sessionId);
+                      try {
+                        callSocket.send("call.end", { sessionId });
+                      } catch (e) {
+                        console.error(e);
+                      }
+                      onActionComplete();
+                    }}
+                    onPeerHangup={(sessionId) => {
+                      markSessionEnded(sessionId);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="xl:col-span-4">
+                <div className="bg-[#16161A] border border-white/5 rounded-2xl flex flex-col h-[380px] xl:h-full xl:min-h-[420px] overflow-hidden shadow-xl">
+                  <div className="p-4 border-b border-white/5 flex items-center justify-between bg-[#0F0F12]">
+                    <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400">
+                      Session transcript
+                    </h2>
+                    <span className="bg-emerald-500/20 text-emerald-400 text-[10px] px-2 py-0.5 rounded font-bold uppercase">
+                      Live
+                    </span>
+                  </div>
+
+                  <div id="interpreter-chat-feed" className="flex-1 p-4 overflow-y-auto space-y-4">
+                    {activeSession.chatMessages.map((msg, index) => {
+                      const isYou = msg.senderRole === "interpreter";
+                      const isSystem = msg.senderRole === "system";
+
+                      if (isSystem) {
+                        return (
+                          <div
+                            key={index}
+                            className="space-y-1 block text-center py-1 border-y border-white/5 bg-zinc-900/20"
+                          >
+                            <p className="text-[10px] text-slate-500 font-bold uppercase">{msg.senderName}</p>
+                            <p className="text-[11px] text-slate-400 italic">{msg.text}</p>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={index} className="space-y-1">
+                          <p
+                            className={`text-[10px] font-bold uppercase ${
+                              isYou ? "text-emerald-500" : "text-blue-500"
+                            }`}
+                          >
+                            {msg.senderName}
+                          </p>
+                          <div
+                            className={`p-3 rounded-lg text-xs leading-relaxed ${
+                              isYou
+                                ? "bg-white/5 text-slate-200"
+                                : "bg-blue-500/5 border-l-2 border-blue-500 text-slate-200"
+                            }`}
+                          >
+                            <p>{msg.text}</p>
+                            {msg.translatedText && (
+                              <p className="text-cyan-400 text-[11px] mt-1 italic border-t border-white/5 pt-1">
+                                ↳ {msg.translatedText}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {isTranslating && (
+                      <p className="text-[10px] text-cyan-400 font-mono italic animate-pulse">
+                        Translating…
+                      </p>
+                    )}
+                  </div>
+
+                  <form onSubmit={handleSendMessage} className="p-3 bg-black/30 border-t border-white/5">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder={isTranslating ? "Translating…" : "Type a message to translate…"}
+                        value={chatInput}
+                        disabled={isTranslating}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        className="w-full bg-zinc-900 border border-white/10 rounded-lg pl-4 pr-10 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50"
+                      />
+                      <button
+                        type="submit"
+                        className="absolute right-2 top-2 p-1 hover:bg-zinc-800 text-slate-400 rounded-md"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
           </div>
         ) : (
-          
+
           /* Scheduling grid layout */
           <div className="space-y-6">
-            
-            {/* Live Incoming unclaimed Alert Popup Banner */}
-            {visibleIncomingRequest && (
-              isDirectDialSession(visibleIncomingRequest, interpreterId) ? (
-                // Direct VIP calling flashbox with high visual rhythm
-                <div className="p-6 rounded-2xl border-2 border-emerald-500 bg-emerald-950/25 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 animate-scale-up shadow-2xl shadow-emerald-500/5">
-                  <div className="flex items-center gap-4">
-                    <div className="w-14 h-14 rounded-full bg-emerald-500/10 border-2 border-emerald-500/30 flex items-center justify-center animate-bounce shrink-0 shadow-lg shadow-emerald-500/10 text-emerald-400">
-                      <PhoneCall className="w-7 h-7 text-emerald-400" />
-                    </div>
-                    <div className="space-y-1">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-500/20 text-emerald-405 border border-emerald-500/30 text-[9px] font-black uppercase tracking-widest leading-none">
-                        📞 Premium Speed Dial Line
-                      </span>
-                      <h4 className="text-base font-extrabold text-white uppercase tracking-tight">
-                        Direct Caller: {visibleIncomingRequest.clientName}
-                      </h4>
-                      <p className="text-xs text-slate-300">
-                        Language Pair: <span className="font-bold text-slate-100">{visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}</span> • Domain: <span className="capitalize">{visibleIncomingRequest.serviceType} Case</span>
-                      </p>
-                      <div className="pt-0.5 flex items-center gap-2 text-[10px] text-emerald-400 font-mono font-bold uppercase tracking-wider">
-                        <span>Fee Allocated: {(visibleIncomingRequest.cost * 0.85).toFixed(2)} ETB</span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" /> Connection Standby</span>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center gap-3 w-full md:w-auto justify-end pt-2 md:pt-0 shrink-0">
-                    <button
-                      type="button"
-                      disabled={isAccepting}
-                      onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
-                      className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 font-black text-xs uppercase tracking-wider rounded-xl text-white flex items-center gap-2 shadow-lg shadow-emerald-500/20 cursor-pointer active:scale-95 transition-transform duration-100"
-                    >
-                      <Phone className="w-4 h-4" /> {isAccepting ? "Connecting…" : "Connect Line"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isAccepting}
-                      onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
-                      className="px-4 py-3 bg-red-650/10 text-red-400 hover:text-white hover:bg-red-600 border border-red-500/25 hover:border-red-500 font-extrabold text-xs uppercase rounded-xl cursor-pointer active:scale-95 transition-transform duration-100"
-                    >
-                      Decline
-                    </button>
-                  </div>
+            {onlineStatus === "active" && (
+              <div
+                className={`rounded-2xl border border-dashed p-5 sm:p-6 text-center ${
+                  theme === "light"
+                    ? "border-emerald-200 bg-emerald-50/80"
+                    : "border-emerald-500/25 bg-emerald-500/5"
+                }`}
+              >
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
+                  <PhoneCall className="w-6 h-6 text-emerald-400" />
                 </div>
-              ) : (
-                // Standard general-broadcast matching panel
-                <div className="p-5 rounded-2xl border border-amber-500/20 bg-amber-500/5 text-white flex flex-col md:flex-row justify-between items-start md:items-center gap-4 animate-scale-up">
-                  <div className="space-y-1">
-                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase tracking-widest leading-none border border-amber-500/25">
-                      ⚠️ Immediate matching broadcast available
-                    </span>
-                    <p className="text-xs font-bold text-slate-200 mt-1">
-                      Route requested: {visibleIncomingRequest.languageFrom} ⇆ {visibleIncomingRequest.languageTo}
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      Category: <span className="capitalize">{visibleIncomingRequest.serviceType}</span> • Fee: {(visibleIncomingRequest.cost * 0.85).toFixed(2)} ETB commission
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <div className="text-center font-mono text-slate-400 text-xs bg-black/40 border border-white/5 px-2 py-1.5 rounded">
-                      Expires in: <span className="text-amber-400 font-bold">{countdown}s</span>
-                    </div>
-                    <button
-                      type="button"
-                      disabled={isAccepting}
-                      onClick={() => void handleAcceptRequest(visibleIncomingRequest.id)}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 font-bold text-xs uppercase tracking-wider rounded-lg text-white"
-                    >
-                      {isAccepting ? "Connecting…" : "Accept Room Target"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isAccepting}
-                      onClick={() => void handleDeclineRequest(visibleIncomingRequest.id)}
-                      className="px-3 py-2 bg-white/5 hover:bg-white/10 text-xs text-slate-400 rounded-lg"
-                    >
-                      Pass
-                    </button>
-                  </div>
-                </div>
-              )
+                <p className={`text-sm font-bold ${theme === "light" ? "text-slate-800" : "text-slate-200"}`}>
+                  Ready for incoming calls
+                </p>
+                <p className={`text-xs mt-1 max-w-md mx-auto ${theme === "light" ? "text-slate-600" : "text-slate-500"}`}>
+                  New requests open in a popup with client details, language pair, and earnings. Accept or decline from there.
+                </p>
+              </div>
             )}
 
-            {/* Shift Scheduler Manager */}
             <div className="bg-[#16161A] border border-white/5 rounded-2xl p-6 shadow-xl">
               <div className="flex items-center justify-between pb-4 border-b border-white/5">
                 <div>
@@ -1080,87 +1212,6 @@ export default function InterpreterDashboard({
       </div>
       )}
 
-      {/* Sidebar Utilities Grid: Live room comments, Withdraw Earnings summary */}
-      {dashboardSlide === "dispatch" && activeSession && (
-        <div className="col-span-12 lg:col-span-4 space-y-6 animate-fade-in">
-
-          {/* Live Translation feed block if is in active room */}
-          <div className="bg-[#16161A] border border-white/5 rounded-2xl flex flex-col h-[350px] overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-white/5 flex items-center justify-between bg-[#0F0F12]">
-              <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                Linguistic Feed Translation
-              </h2>
-              <span className="bg-emerald-500/20 text-emerald-400 text-[10px] px-2 py-0.5 rounded font-bold uppercase">
-                Active Desk
-              </span>
-            </div>
-
-            {/* Chat list */}
-            <div id="interpreter-chat-feed" className="flex-1 p-4 overflow-y-auto space-y-4">
-              {activeSession.chatMessages.map((msg, index) => {
-                const isYou = msg.senderRole === "interpreter";
-                const isSystem = msg.senderRole === "system";
-
-                if (isSystem) {
-                  return (
-                    <div key={index} className="space-y-1 block text-center py-1 border-y border-white/5 bg-zinc-900/20">
-                      <p className="text-[10px] text-slate-500 font-bold uppercase">{msg.senderName}</p>
-                      <p className="text-[11px] text-slate-400 italic">
-                        {msg.text}
-                      </p>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={index} className="space-y-1">
-                    <p className={`text-[10px] font-bold uppercase ${isYou ? "text-emerald-500" : "text-blue-500"}`}>
-                      {msg.senderName}
-                    </p>
-                    <div className={`p-3 rounded-lg text-xs leading-relaxed ${
-                      isYou ? "bg-white/5 text-slate-200" : "bg-blue-500/5 border-l-2 border-blue-500 text-slate-200"
-                    }`}>
-                      <p>{msg.text}</p>
-                      {msg.translatedText && (
-                        <p className="text-cyan-400 text-[11px] mt-1 italic border-t border-white/5 pt-1">
-                          ↳ Translate output: {msg.translatedText}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-
-              {isTranslating && (
-                <p className="text-[10px] text-cyan-400 font-mono italic animate-pulse">
-                  Translating linguistic query...
-                </p>
-              )}
-            </div>
-
-            {/* Input area */}
-            <form onSubmit={handleSendMessage} className="p-3 bg-black/30 border-t border-white/5">
-              <div className="relative">
-                <input 
-                  type="text" 
-                  placeholder={isTranslating ? "Translating..." : "Type text turn to translate..."}
-                  value={chatInput}
-                  disabled={isTranslating}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  className="w-full bg-zinc-900 border border-white/10 rounded-lg pl-4 pr-10 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50"
-                />
-                <button 
-                  type="submit"
-                  className="absolute right-2 top-2 p-1 hover:bg-zinc-800 text-slate-400 rounded-md"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Slide 2: Revenue & Earnings Ledger */}
       {dashboardSlide === "earnings" && (
         <div className="col-span-12 lg:col-span-8 lg:col-start-2 xl:col-span-6 xl:col-start-4 space-y-6 animate-fade-in">
@@ -1291,6 +1342,39 @@ export default function InterpreterDashboard({
 
       </div>
       )}
+
+      <AnimatePresence>
+        {visibleIncomingRequest && (
+          <motion.div
+            key="incoming-call-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 sm:p-6 bg-black/70 backdrop-blur-sm"
+          >
+            <IncomingCallCard
+              session={visibleIncomingRequest}
+              interpreterId={interpreterId}
+              isAccepting={isAccepting}
+              acceptPhase={acceptPhase}
+              countdown={countdown}
+              ringAudioReady={ringAudioReady}
+              acceptError={acceptError}
+              interpreterLanguages={interpreterLanguages}
+              languageProficiencies={currentInterpreter?.languageProficiencies}
+              theme={theme}
+              onAccept={(sessionId) => void handleAcceptRequest(sessionId)}
+              onDecline={(sessionId) => void handleDeclineRequest(sessionId)}
+              onEnableRing={() => {
+                void unlockIncomingCallAudio().then((ready) => {
+                  setRingAudioReady(ready);
+                  if (ready) void playIncomingCallBeep();
+                });
+              }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );

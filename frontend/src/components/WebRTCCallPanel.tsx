@@ -15,6 +15,8 @@ interface WebRTCCallPanelProps {
   remoteLabel: string;
   onEndCall: () => void | Promise<void>;
   onPeerHangup?: (sessionId: string) => void;
+  /** Larger layout for client-side video calls */
+  wide?: boolean;
 }
 
 export default function WebRTCCallPanel({
@@ -30,6 +32,7 @@ export default function WebRTCCallPanel({
   remoteLabel,
   onEndCall,
   onPeerHangup,
+  wide = false,
 }: WebRTCCallPanelProps) {
   const [isEnding, setIsEnding] = React.useState(false);
   const {
@@ -61,11 +64,15 @@ export default function WebRTCCallPanel({
     connectionState === "connected" ||
     connectionState === "connecting" ||
     remoteReady;
-  const isRinging = status === "incoming" && isCaller;
+  const isRinging = status === "incoming" && isCaller && !isConnected;
   const isWaitingForPeer = !isCaller && status === "active" && !isConnected;
 
   return (
-    <div className="bg-black rounded-2xl relative aspect-video overflow-hidden shadow-inner flex flex-col p-4">
+    <div
+      className={`bg-black rounded-2xl relative overflow-hidden shadow-inner flex flex-col p-4 w-full ${
+        wide ? "min-h-[380px] sm:min-h-[460px] md:min-h-[520px]" : "aspect-video"
+      }`}
+    >
       <div className="flex justify-between items-center z-10 w-full shrink-0">
         <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-black/60 backdrop-blur rounded-xl text-[10px] text-white font-bold uppercase border border-white/5">
           {isConnected ? (
@@ -87,8 +94,12 @@ export default function WebRTCCallPanel({
         )}
       </div>
 
-      <div className="flex-1 grid grid-cols-2 gap-3 items-center py-3 min-h-0 relative">
-        <div className="relative bg-zinc-900/80 rounded-xl aspect-[4/3] overflow-hidden border border-white/5 h-full max-h-full">
+      <div className={`flex-1 grid grid-cols-2 items-stretch py-3 min-h-0 relative ${wide ? "gap-4 sm:gap-5" : "gap-3"}`}>
+        <div
+          className={`relative bg-zinc-900/80 rounded-xl overflow-hidden border border-white/5 h-full min-h-0 ${
+            wide ? "min-h-[180px] sm:min-h-[240px] md:min-h-[280px]" : "aspect-[4/3] max-h-full"
+          }`}
+        >
           <span className="absolute bottom-2 left-2 z-10 text-[9px] bg-black/60 px-2 py-0.5 rounded text-slate-300">
             {localLabel}
           </span>
@@ -106,7 +117,11 @@ export default function WebRTCCallPanel({
           )}
         </div>
 
-        <div className="relative bg-zinc-900/80 rounded-xl aspect-[4/3] overflow-hidden border border-white/5 h-full max-h-full">
+        <div
+          className={`relative bg-zinc-900/80 rounded-xl overflow-hidden border border-white/5 h-full min-h-0 ${
+            wide ? "min-h-[180px] sm:min-h-[240px] md:min-h-[280px]" : "aspect-[4/3] max-h-full"
+          }`}
+        >
           <span className="absolute bottom-2 left-2 z-10 text-[9px] bg-black/60 px-2 py-0.5 rounded text-emerald-400">
             {remoteLabel}
           </span>

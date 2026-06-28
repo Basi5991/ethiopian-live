@@ -32,6 +32,17 @@ export function isCallLive(session: Session | null | undefined): boolean {
   return session.status === "active" || Boolean(session.interpreterId);
 }
 
+/** Client should start WebRTC while ringing so the offer is ready when the interpreter accepts. */
+export function shouldClientNegotiateWebRTC(session: Session | null | undefined): boolean {
+  if (!session || session.serviceMode === "AI") return false;
+  return session.status === "incoming" || isCallLive(session);
+}
+
+export function shouldInterpreterNegotiateWebRTC(session: Session | null | undefined): boolean {
+  if (!session) return false;
+  return isCallLive(session);
+}
+
 export function callPanelStatus(session: Session): Session["status"] {
   return isCallLive(session) ? "active" : session.status;
 }
